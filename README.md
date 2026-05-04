@@ -64,6 +64,7 @@ the experience is identical to Warp, but every layer is yours.
 - **SSE streaming** — incremental block rendering identical to Warp's first-party path
 - **18 local tools** — shell / read / edit / search / mcp / drive docs / skills / ask, all executed locally
 - **System prompt templates** — eight model-family prompts ported from opencode (default / anthropic / gpt / beast / gemini / kimi / codex / trinity)
+- **Software rendering enabled** — Prioritizes `llvmpipe` CPU rendering to conserve VRAM on Linux setups.
 - **models.dev integration** — searchable Providers subpage with thousands of preloaded model entries
 - **Privacy first** — Cloud Agent / Computer Use / Referral disabled by default; no telemetry
 - **Warp experience preserved** — continuously merged with upstream; Blocks, Workflows, AI commands, Keymaps and themes all kept

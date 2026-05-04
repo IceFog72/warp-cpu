@@ -1,10 +1,10 @@
 <div align="center">
 
-# OpenWarp
+# warp-cpu
 
-**Bring any AI model into your terminal**
+**Bring any AI model into your terminal (Software Rendered)**
 
-OpenWarp is a community fork of [Warp](https://github.com/warpdotdev/warp) that opens up the AI layer.
+warp-cpu is a fork of [OpenWarp](https://github.com/zerx-lab/warp) (a community fork of [Warp](https://github.com/warpdotdev/warp)) optimized to use CPU software rendering (`llvmpipe`) by default. This saves precious VRAM on Linux machines, especially those with dedicated GPUs where VRAM is needed for other tasks like AI models or gaming.
 Keep the full Warp terminal experience — blocks, workflows, keymaps — while plugging in
 **any OpenAI-compatible provider**, customizing system prompts with minijinja templates,
 and keeping every credential local.

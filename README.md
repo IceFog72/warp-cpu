@@ -13,6 +13,13 @@ and keeping every credential local.
 
 > ⚠️ Early development. No official release yet. **Not affiliated with Warp, Inc.**
 
+### 🖥️ Linux CPU Rendering (llvmpipe)
+To force Warp to use CPU rendering on Linux instead of crashing or consuming your GPU, always run it with these environment variables:
+```bash
+env __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json LIBGL_ALWAYS_SOFTWARE=1 WGPU_BACKEND=gl warp-terminal-oss
+```
+*(Note: These variables are automatically injected if you use the `.desktop` shortcut included in this repo).*
+
 </div>
 
 ---

@@ -7,7 +7,7 @@ Type=Application
 Name=OpenWarp
 GenericName=TerminalEmulator
 
-Exec=warp-terminal-oss %U
+Exec=env __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json LIBGL_ALWAYS_SOFTWARE=1 WGPU_BACKEND=gl warp-terminal-oss %U
 StartupWMClass=dev.warp.OpenWarp
 
 Keywords=shell;prompt;command;commandline;cmd;

@@ -702,6 +702,10 @@ fn adapter_stability_sort_func(
 ) -> AdapterSupport {
     let adapter_info = adapter.get_info();
 
+    if adapter_info.device_type == wgpu::DeviceType::Cpu {
+        return AdapterSupport::Supported;
+    }
+
     let window_server_is_wayland = matches!(
         windowing_system,
         Some(windowing::System::Wayland) | Some(windowing::System::X11 { is_x_wayland: true })
@@ -783,20 +787,20 @@ fn power_preference_adapter_sort_func(
     match pref {
         GPUPowerPreference::LowPower => {
             |adapter: &wgpu::Adapter| match adapter.get_info().device_type {
-                wgpu::DeviceType::IntegratedGpu => 0,
-                wgpu::DeviceType::DiscreteGpu => 1,
-                wgpu::DeviceType::Other => 2,
-                wgpu::DeviceType::VirtualGpu => 3,
-                wgpu::DeviceType::Cpu => 4,
+                wgpu::DeviceType::Cpu => 0,
+                wgpu::DeviceType::IntegratedGpu => 1,
+                wgpu::DeviceType::DiscreteGpu => 2,
+                wgpu::DeviceType::Other => 3,
+                wgpu::DeviceType::VirtualGpu => 4,
             }
         }
         GPUPowerPreference::HighPerformance => {
             |adapter: &wgpu::Adapter| match adapter.get_info().device_type {
-                wgpu::DeviceType::DiscreteGpu => 0,
-                wgpu::DeviceType::IntegratedGpu => 1,
-                wgpu::DeviceType::Other => 2,
-                wgpu::DeviceType::VirtualGpu => 3,
-                wgpu::DeviceType::Cpu => 4,
+                wgpu::DeviceType::Cpu => 0,
+                wgpu::DeviceType::DiscreteGpu => 1,
+                wgpu::DeviceType::IntegratedGpu => 2,
+                wgpu::DeviceType::Other => 3,
+                wgpu::DeviceType::VirtualGpu => 4,
             }
         }
     }

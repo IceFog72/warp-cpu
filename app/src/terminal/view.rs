@@ -637,7 +637,7 @@ lazy_static! {
 pub const AI_CONTROL_PANEL_MARGIN: f32 = 10.;
 
 pub const OVERFLOW_BUTTON_OFFSET_X: f32 = -3.;
-pub const MAX_WAKEUPS_PER_SECOND: u64 = 60;
+pub const MAX_WAKEUPS_PER_SECOND: u64 = 30;
 pub const WAKEUP_THROTTLE_PERIOD: Duration =
     Duration::from_micros(1000 * 1000 / MAX_WAKEUPS_PER_SECOND);
 
@@ -2497,6 +2497,7 @@ pub struct TerminalView {
 
     /// Most recent command correction encountered, if any, used for the keyboard shortcut action.
     most_recent_command_correction: Option<Correction>,
+    last_rendered_generation: u64,
 
     /// Set of block indexes that are bookmarked, including the mouse states for their indicators
     bookmarked_blocks: HashMap<BlockIndex, MouseStateHandle>,
@@ -4112,6 +4113,7 @@ impl TerminalView {
             is_ssh_file_uploader: false,
             ssh_file_upload,
             most_recent_command_correction: None,
+            last_rendered_generation: 0,
             shell_indicator_type: None,
             shell_detail: None,
             position_id: format!("terminal_view_{}", ctx.view_id()),
@@ -7892,6 +7894,19 @@ impl TerminalView {
     /// This function is invoked every time there is some form of view event
     /// such as a state change or terminal wakeup to update the view context.
     fn handle_terminal_wakeup(&mut self, _: (), ctx: &mut ViewContext<Self>) {
+        let mut model = if let Some(model) = self.model.try_lock() {
+            model
+        } else {
+            // If the model is locked, it's being updated. Skip this frame to avoid blocking the UI thread.
+            return;
+        };
+
+        let current_generation = model.generation();
+        if current_generation == self.last_rendered_generation {
+            return;
+        }
+        self.last_rendered_generation = current_generation;
+
         // If find bar is active, we update the matches for the last/active block or the alt screen.
         if self.find_model.as_ref(ctx).is_find_bar_open() {
             self.find_model.update(ctx, |find_model, ctx| {
@@ -7900,15 +7915,11 @@ impl TerminalView {
         }
 
         // For simplicity, we simply rescan the entire block for block filter matches.
-        self.model
-            .lock()
-            .block_list_mut()
-            .maybe_refilter_active_block_output();
+        model.block_list_mut().maybe_refilter_active_block_output();
 
         // If the block filter editor is open on an active block we update the
         // number of line matches.
         if let Some(block_index) = self.active_filter_editor_block_index {
-            let model = self.model.lock();
             let active_block_index = model.block_list().active_block_index();
             let num_matched_lines = model
                 .block_list()
@@ -7924,11 +7935,12 @@ impl TerminalView {
         // The active block height could have changed since the last time it was calculated, as
         // one cause of the Wakeup signal is the long-running process timer. Make sure that the
         // model is up-to-date with the current height information.
-        if !self.model.lock().is_alt_screen_active() {
-            let mut model = self.model.lock();
+        if !model.is_alt_screen_active() {
             model.block_list_mut().update_background_block_height();
             model.block_list_mut().update_active_block_height();
         }
+        drop(model); // Release lock before calling other methods that might notify
+
         self.maybe_emit_terminal_view_state_changed_for_long_running_block(ctx);
         self.use_agent_footer.update(ctx, |footer, ctx| {
             footer.notify_and_notify_children(ctx);

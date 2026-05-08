@@ -507,6 +507,10 @@ pub struct TerminalModel {
     /// shell rather than the user preference.
     active_shell_launch_data: Option<ShellLaunchData>,
 
+    /// A generation counter that is incremented every time the terminal model is modified.
+    /// This is used to implement demand-driven rendering.
+    generation: std::sync::atomic::AtomicU64,
+
     /// Partially populated `SessionInfo` from the `InitShell` DCS payload.
     ///
     /// This is used to construct a final, populated `SessionInfo` after the session is
@@ -1161,6 +1165,7 @@ impl TerminalModel {
             ordered_terminal_events_for_shared_session_tx: None,
             write_to_pty_events_for_shared_session_tx: None,
             is_receiving_agent_conversation_replay: false,
+            generation: std::sync::atomic::AtomicU64::new(0),
             tmux_background_outputs: HashMap::new(),
             tmux_control_mode_context: None,
             pending_warp_initiated_control_mode: None,
@@ -1681,6 +1686,15 @@ impl TerminalModel {
         self.image_id_to_metadata.remove(&image_id);
     }
 
+    pub fn generation(&self) -> u64 {
+        self.generation.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn increment_generation(&self) {
+        self.generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
     /// Starts the active block and resets block-to-block state. For local sessions, this is called
     /// from the input editor when it sends user bytes to the pty (usually the
     /// next command to run, but also ctrl-d). Once we've written to the pty on
@@ -1980,6 +1994,7 @@ impl TerminalModel {
                 _ => true,
             };
             self.block_list.resize(&size_update, update_old_blocks);
+            self.increment_generation();
         }
 
         if size_update.rows_or_columns_changed() {
@@ -2105,6 +2120,7 @@ impl TerminalModel {
         self.obfuscate_secrets = obfuscate_secrets;
         self.alt_screen.set_obfuscate_secrets(obfuscate_secrets);
         self.block_list.set_obfuscate_secrets(obfuscate_secrets);
+        self.increment_generation();
     }
 
     /// Disables secret obfuscation for shared session creators only.
@@ -2821,6 +2837,7 @@ impl ansi::Handler for TerminalModel {
         }
         let handled_after_inband = data.was_sent_after_in_band_command();
         delegate!(self.precmd(data));
+        self.increment_generation();
 
         self.emit_handler_event(HandlerEvent::Precmd {
             session_id: session_id.map(|id| id.into()),
@@ -2831,6 +2848,7 @@ impl ansi::Handler for TerminalModel {
 
     fn preexec(&mut self, data: PreexecValue) {
         delegate!(self.preexec(data));
+        self.increment_generation();
         self.emit_handler_event(HandlerEvent::Preexec);
     }
 
@@ -3104,6 +3122,7 @@ impl ansi::Handler for TerminalModel {
     }
 
     fn on_finish_byte_processing(&mut self, input: &ansi::ProcessorInput<'_>) {
+        self.increment_generation();
         if let Some(SshLogin {
             notification_state, ..
         }) = &self.notify_on_end_of_ssh_login
@@ -3130,7 +3149,7 @@ impl ansi::Handler for TerminalModel {
         if !input.is_synchronized_output_frame() && self.shared_session_status().is_sharer() {
             if let Some(tx) = &self.ordered_terminal_events_for_shared_session_tx {
                 if let Err(e) = tx.try_send(OrderedTerminalEventType::PtyBytesRead {
-                    bytes: bytes.to_owned(),
+                    bytes: input.bytes().to_owned(),
                 }) {
                     log::warn!("Failed to send OrderedTerminalEventType::PtyBytesRead: {e}");
                 }

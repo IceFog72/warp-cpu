@@ -20,7 +20,7 @@ cleanup() {
 trap cleanup EXIT
 
 # By default we build dev bundles.
-RELEASE_CHANNEL="dev"
+RELEASE_CHANNEL="${RELEASE_CHANNEL:-dev}"
 FEATURES="release_bundle,crash_reporting"
 PACKAGES=( appimage )
 BUILD="true"
@@ -178,7 +178,7 @@ elif [[ $RELEASE_CHANNEL = "oss" ]]; then
   APP_NAME="OpenWarp"
   # The OSS channel does not ship Sentry, so drop the crash_reporting feature
   # (which would otherwise pull in the Sentry SDK as a dependency).
-  FEATURES="release_bundle"
+  FEATURES="release_bundle,pprof_cpu_profiling"
 fi
 
 # Artifact-specific binary naming
@@ -223,8 +223,8 @@ if [[ "$BUILD" == "true" ]]; then
   cp "$EXECUTABLE_PATH" "$DEBUG_EXECUTABLE_PATH"
 
   echo "Stripping debug symbols from '$EXECUTABLE_PATH'"
-  if [[ $RELEASE_CHANNEL = "dev" ]]; then
-    # For dev builds, only strip debug symbols, as we want to keep some
+  if [[ $RELEASE_CHANNEL = "dev" || "$FEATURES" == *"pprof_cpu_profiling"* ]]; then
+    # For dev builds or profiling builds, only strip debug symbols, as we want to keep some
     # symbols for profiling purposes.
     strip --strip-debug "$EXECUTABLE_PATH"
   else

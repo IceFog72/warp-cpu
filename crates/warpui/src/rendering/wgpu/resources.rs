@@ -845,10 +845,21 @@ fn create_surface_config(
         config.usage |= wgpu::TextureUsages::COPY_SRC;
     }
 
-    // Use a non-vsync presentation mode for reduced input delay.  This could
-    // cause visual tearing on present, but we're ok with paying that cost to
-    // improve responsiveness.
-    config.present_mode = PresentMode::AutoNoVsync;
+    let info = adapter.get_info();
+    let driver_lower = info.driver.to_lowercase();
+    let is_software = driver_lower.contains("llvmpipe")
+        || driver_lower.contains("softpipe")
+        || info.name.to_lowercase().contains("llvmpipe")
+        || info.device_type == wgpu::DeviceType::Cpu;
+
+    if is_software {
+        config.present_mode = PresentMode::Fifo;
+    } else {
+        // Use a non-vsync presentation mode for reduced input delay.  This could
+        // cause visual tearing on present, but we're ok with paying that cost to
+        // improve responsiveness.
+        config.present_mode = PresentMode::AutoNoVsync;
+    }
 
     // Explicitly request a non-opaque alpha compositing mode, if available.
     // Without this, transparent surfaces don't work on native Wayland.

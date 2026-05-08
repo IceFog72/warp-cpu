@@ -55,6 +55,25 @@ if [[ "$(source /etc/os-release; echo $ID $ID_LIKE)" = *"debian"* ]]; then
     "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/${PROTOC_ZIP}"
   sudo unzip -o /tmp/protoc.zip -d /usr/local bin/protoc 'include/*'
   rm /tmp/protoc.zip
+elif [[ "$(source /etc/os-release; echo $ID $ID_LIKE)" = *"arch"* ]]; then
+  echo "⬇️  Installing build-time dependencies (Arch)..."
+  PACKAGES=(
+    base-devel
+    cmake
+    git
+    python
+    libgit2
+    openssl
+    freetype2
+    fontconfig
+    expat
+    jq
+    brotli
+    alsa-lib
+    clang
+    protobuf
+  )
+  sudo pacman -S --needed --noconfirm "${PACKAGES[@]}"
 else
   echo -e "⚠️  ${red}Unknown Linux distribution; necessary build dependencies may not be installed!${reset}"
 fi

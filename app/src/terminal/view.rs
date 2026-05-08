@@ -637,7 +637,7 @@ lazy_static! {
 pub const AI_CONTROL_PANEL_MARGIN: f32 = 10.;
 
 pub const OVERFLOW_BUTTON_OFFSET_X: f32 = -3.;
-pub const MAX_WAKEUPS_PER_SECOND: u64 = 30;
+pub const MAX_WAKEUPS_PER_SECOND: u64 = 10;
 pub const WAKEUP_THROTTLE_PERIOD: Duration =
     Duration::from_micros(1000 * 1000 / MAX_WAKEUPS_PER_SECOND);
 

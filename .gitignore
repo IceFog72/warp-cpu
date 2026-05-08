@@ -70,3 +70,5 @@ __pycache__/
 
 # Project notes
 .note/
+perf.data.old
+perf.data

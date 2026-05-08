@@ -514,6 +514,11 @@ pub(super) struct EventLoop {
     /// Soft keyboard manager for mobile WASM.
     #[cfg(target_family = "wasm")]
     soft_keyboard_manager: Option<std::rc::Rc<crate::platform::wasm::SoftKeyboardManager>>,
+    /// Minimum interval between frames when software rendering, to reduce CPU usage.
+    /// `None` means no frame limiting (hardware GPU path).
+    min_frame_interval: Option<Duration>,
+    /// Timestamp of the last completed frame.
+    last_frame_time: Option<Instant>,
 }
 
 impl EventLoop {
@@ -524,6 +529,8 @@ impl EventLoop {
         window_class: Option<String>,
         proxy: EventLoopProxy<CustomEvent>,
     ) -> Self {
+        let min_frame_interval = Self::compute_min_frame_interval();
+
         Self {
             ui_app: ui_app.clone(),
             callbacks: AppCallbackDispatcher::new(callbacks, ui_app),
@@ -533,9 +540,35 @@ impl EventLoop {
             proxy,
             ime_enabled: false,
             downrank_non_nvidia_vulkan_adapters: false,
+            min_frame_interval,
+            last_frame_time: None,
             #[cfg(target_family = "wasm")]
             soft_keyboard_manager: None,
         }
+    }
+
+    fn compute_min_frame_interval() -> Option<Duration> {
+        let force_software = std::env::var("WARP_FORCE_SOFTWARE")
+            .ok()
+            .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
+
+        let libgl_software = std::env::var("LIBGL_ALWAYS_SOFTWARE")
+            .ok()
+            .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
+
+        let wgpu_gl_backend = std::env::var("WGPU_BACKEND")
+            .ok()
+            .is_some_and(|v| v.eq_ignore_ascii_case("gl"));
+
+        let is_software = force_software || libgl_software || wgpu_gl_backend;
+
+        let fps = std::env::var("WARP_SOFTWARE_FPS")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .or(if is_software { Some(30) } else { None })
+            .map(|v| v.clamp(1, 120));
+
+        fps.map(|fps| Duration::from_secs_f64(1.0 / fps as f64))
     }
 
     /// Handles a single [`winit::event::Event`].
@@ -1002,6 +1035,15 @@ impl EventLoop {
                     winit_window.recreate_renderer(self.downrank_non_nvidia_vulkan_adapters);
                 }
             })
+        }
+
+        if let Some(interval) = self.min_frame_interval {
+            let now = Instant::now();
+            let should_render = self.last_frame_time.map_or(true, |last| now - last >= interval);
+            if !should_render {
+                return;
+            }
+            self.last_frame_time = Some(now);
         }
 
         let render_result = (|| {

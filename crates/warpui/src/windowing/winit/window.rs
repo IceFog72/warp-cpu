@@ -734,6 +734,10 @@ pub(super) struct Window {
     /// maximize/restore when double-clicked.
     titlebar_height: Cell<f32>,
     capture_callback: RefCell<Option<FrameCaptureCallback>>,
+    /// When true, the cached scene is stale and must be rebuilt before the next render.
+    needs_rebuild: Cell<bool>,
+    /// When true, a winit redraw request is already queued — skip duplicate calls.
+    redraw_pending: Cell<bool>,
 }
 
 impl Window {
@@ -744,6 +748,8 @@ impl Window {
             scene: Default::default(),
             titlebar_height: Cell::new(DEFAULT_TITLEBAR_HEIGHT),
             capture_callback: RefCell::new(None),
+            needs_rebuild: Cell::new(false),
+            redraw_pending: Cell::new(false),
         }
     }
 
@@ -848,6 +854,11 @@ impl Window {
     ) -> Result<(), renderer::Error> {
         let mut scene = self.scene.borrow_mut();
 
+        if self.needs_rebuild.get() {
+            *scene = None;
+            self.needs_rebuild.set(false);
+        }
+
         if scene.is_none() {
             *scene = new_scene;
         }
@@ -913,6 +924,15 @@ impl Window {
                 }
             }
         }
+
+        self.redraw_pending.set(false);
+        drop(scene);
+        drop(inner);
+        if self.needs_rebuild.get() {
+            if let Some(inner) = self.inner.borrow_mut().as_mut() {
+                inner.window.request_redraw();
+            }
+        }
         Ok(())
     }
 
@@ -972,7 +992,7 @@ impl Window {
     }
 
     pub fn has_scene(&self) -> bool {
-        self.scene.borrow().is_some()
+        self.scene.borrow().is_some() && !self.needs_rebuild.get()
     }
 
     pub fn handle_resize(&self) {
@@ -1705,15 +1725,22 @@ impl platform::WindowContext for Window {
 
     fn render_scene(&self, scene: Rc<Scene>) {
         self.scene.borrow_mut().replace(scene);
+        self.needs_rebuild.set(false);
         if let Some(inner) = self.inner.borrow_mut().as_mut() {
-            inner.window.request_redraw();
+            if !self.redraw_pending.get() {
+                self.redraw_pending.set(true);
+                inner.window.request_redraw();
+            }
         }
     }
 
     fn request_redraw(&self) {
-        let _ = self.scene.borrow_mut().take();
+        self.needs_rebuild.set(true);
         if let Some(inner) = self.inner.borrow_mut().as_mut() {
-            inner.window.request_redraw();
+            if !self.redraw_pending.get() {
+                self.redraw_pending.set(true);
+                inner.window.request_redraw();
+            }
         }
     }
 
@@ -1723,7 +1750,10 @@ impl platform::WindowContext for Window {
     ) {
         *self.capture_callback.borrow_mut() = Some(callback);
         if let Some(inner) = self.inner.borrow_mut().as_mut() {
-            inner.window.request_redraw();
+            if !self.redraw_pending.get() {
+                self.redraw_pending.set(true);
+                inner.window.request_redraw();
+            }
         }
     }
 }

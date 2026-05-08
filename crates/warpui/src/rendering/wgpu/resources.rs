@@ -295,9 +295,27 @@ async fn select_adapter(
         downrank_non_nvidia_vulkan_adapters,
     );
 
+    let force_software = std::env::var("WARP_FORCE_SOFTWARE")
+        .ok()
+        .is_some_and(|val| val == "1" || val.to_lowercase() == "true");
+
     let adapters = sorted_adapters
         // Filter out any unsupported adapters and log information about each one.
         .filter(|adapter| is_supported_adapter(adapter, surface))
+        .filter(|adapter| {
+            if force_software {
+                let info = adapter.get_info();
+                let is_cpu = info.device_type == wgpu::DeviceType::Cpu
+                    || info.driver == "llvmpipe"
+                    || info.driver == "swrast";
+                if !is_cpu {
+                    log::info!("Filtering out non-CPU adapter {:?} due to WARP_FORCE_SOFTWARE", info.name);
+                }
+                is_cpu
+            } else {
+                true
+            }
+        })
         // While we don't strictly need to collect the iterator into a vector,
         // this ensures we log adapter information for all adapters.  (Omitting
         // this means the iterator is lazily evaluated, and we'll only print

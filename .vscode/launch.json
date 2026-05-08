@@ -25,6 +25,7 @@
       "env": {
         "__EGL_VENDOR_LIBRARY_FILENAMES": "/usr/share/glvnd/egl_vendor.d/50_mesa.json",
         "LIBGL_ALWAYS_SOFTWARE": "1",
+        "WARP_FORCE_SOFTWARE": "1",
         "WGPU_BACKEND": "gl",
         "RUST_BACKTRACE": "1",
         "RUST_LOG": "info,wgpu=warn,wgpu_hal=warn,naga=warn,warp::terminal::view=info",
@@ -59,6 +60,7 @@
       "env": {
         "__EGL_VENDOR_LIBRARY_FILENAMES": "/usr/share/glvnd/egl_vendor.d/50_mesa.json",
         "LIBGL_ALWAYS_SOFTWARE": "1",
+        "WARP_FORCE_SOFTWARE": "1",
         "WGPU_BACKEND": "gl",
         "RUST_BACKTRACE": "1",
         "RUST_LOG": "info,wgpu=warn,wgpu_hal=warn,naga=warn,warp::terminal::view=info",
@@ -83,6 +85,7 @@
       "env": {
         "__EGL_VENDOR_LIBRARY_FILENAMES": "/usr/share/glvnd/egl_vendor.d/50_mesa.json",
         "LIBGL_ALWAYS_SOFTWARE": "1",
+        "WARP_FORCE_SOFTWARE": "1",
         "WGPU_BACKEND": "gl",
         "RUST_BACKTRACE": "1"
       },

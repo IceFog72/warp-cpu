@@ -41,22 +41,6 @@ pub(super) fn chunk_code<'a>(
         coalesce_fragments(nodes.into_iter(), code, max_bytes_per_chunk)
     };
 
-    // Release extra unused memory from malloc to the system.  For some
-    // reason, the memory obtained by the allocator is often not released
-    // back to the OS after we're done with it, resulting in high memory
-    // usage (from the perspective of the OS, though not from the perspective
-    // of the allocator).
-    //
-    // See: https://github.com/tree-sitter/tree-sitter/issues/3129
-    #[cfg(all(
-        any(target_os = "linux", target_os = "freebsd"),
-        target_env = "gnu",
-        not(feature = "jemalloc")
-    ))]
-    unsafe {
-        nix::libc::malloc_trim(0);
-    }
-
     Ok(fragments)
 }
 

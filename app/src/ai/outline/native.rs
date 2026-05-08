@@ -45,7 +45,7 @@ pub enum RepoOutlinesEvent {
     OutlinesUpdated(PathBuf),
 }
 
-const MAX_REPO_FILE_SIZE_LIMIT: usize = 5000;
+const MAX_REPO_FILE_SIZE_LIMIT: usize = 10000;
 
 pub struct RepoOutlines {
     outlines: HashMap<PathBuf, OutlineState>,

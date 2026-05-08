@@ -14,13 +14,22 @@
     {
       "type": "lldb",
       "request": "launch",
-      "name": "Debug executable 'warp'",
+      "name": "Debug executable 'warp-oss' (CPU Mode)",
       "cargo": {
-        "args": ["build", "--bin=warp"],
+        "args": ["build", "--bin=warp-oss"],
         "filter": {
-          "name": "warp",
+          "name": "warp-oss",
           "kind": "bin"
         }
+      },
+      "env": {
+        "__EGL_VENDOR_LIBRARY_FILENAMES": "/usr/share/glvnd/egl_vendor.d/50_mesa.json",
+        "LIBGL_ALWAYS_SOFTWARE": "1",
+        "WGPU_BACKEND": "gl",
+        "RUST_BACKTRACE": "1",
+        "RUST_LOG": "info,wgpu=warn,wgpu_hal=warn,naga=warn,warp::terminal::view=info",
+        "MESA_DEBUG": "silent",
+        "MESA_LOADER_DRIVER_OVERRIDE": "kms_swrast"
       },
       "args": [],
       "cwd": "${workspaceFolder}",
@@ -47,6 +56,15 @@
           "kind": "bin"
         }
       },
+      "env": {
+        "__EGL_VENDOR_LIBRARY_FILENAMES": "/usr/share/glvnd/egl_vendor.d/50_mesa.json",
+        "LIBGL_ALWAYS_SOFTWARE": "1",
+        "WGPU_BACKEND": "gl",
+        "RUST_BACKTRACE": "1",
+        "RUST_LOG": "info,wgpu=warn,wgpu_hal=warn,naga=warn,warp::terminal::view=info",
+        "MESA_DEBUG": "silent",
+        "MESA_LOADER_DRIVER_OVERRIDE": "kms_swrast"
+      },
       "args": [],
       "cwd": "${workspaceFolder}",
       "sourceLanguages": ["rust"]
@@ -61,6 +79,12 @@
           "name": "warp",
           "kind": "bin"
         }
+      },
+      "env": {
+        "__EGL_VENDOR_LIBRARY_FILENAMES": "/usr/share/glvnd/egl_vendor.d/50_mesa.json",
+        "LIBGL_ALWAYS_SOFTWARE": "1",
+        "WGPU_BACKEND": "gl",
+        "RUST_BACKTRACE": "1"
       },
       "args": [],
       "cwd": "${workspaceFolder}",

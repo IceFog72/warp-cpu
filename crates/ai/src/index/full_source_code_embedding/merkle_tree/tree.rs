@@ -74,6 +74,17 @@ impl MerkleTree {
         }?;
 
         let leaf_node_to_fragment_metadata = LeafToFragmentMetadata::new(mapping_update);
+
+        // Release extra unused memory from malloc to the system after batch processing.
+        #[cfg(all(
+            any(target_os = "linux", target_os = "freebsd"),
+            target_env = "gnu",
+            not(feature = "jemalloc")
+        ))]
+        unsafe {
+            nix::libc::malloc_trim(0);
+        }
+
         Ok((Self { root }, leaf_node_to_fragment_metadata))
     }
 
@@ -175,6 +186,16 @@ impl MerkleTree {
             vec![self.root_node()]
         };
 
+        // Release extra unused memory from malloc to the system after batch processing.
+        #[cfg(all(
+            any(target_os = "linux", target_os = "freebsd"),
+            target_env = "gnu",
+            not(feature = "jemalloc")
+        ))]
+        unsafe {
+            nix::libc::malloc_trim(0);
+        }
+
         Ok(TreeUpdateResult {
             node_lens,
             leaf_to_fragment_meta_updates,
@@ -201,6 +222,16 @@ impl MerkleTree {
             UpdateFileResult::NoChange => vec![self.root_node()],
             _ => self.nodes_from_mask(node_path)?,
         };
+
+        // Release extra unused memory from malloc to the system after batch processing.
+        #[cfg(all(
+            any(target_os = "linux", target_os = "freebsd"),
+            target_env = "gnu",
+            not(feature = "jemalloc")
+        ))]
+        unsafe {
+            nix::libc::malloc_trim(0);
+        }
 
         Ok(TreeUpdateResult {
             node_lens,

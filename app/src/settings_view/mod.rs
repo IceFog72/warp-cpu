@@ -453,6 +453,7 @@ pub mod flags {
     pub const AUTOSUGGESTIONS_ENABLED_FLAG: &str = "Autosuggestions_Enabled";
     pub const AUTOSUGGESTION_KEYBINDING_HINT_FLAG: &str = "Hide_Autosuggestion_Keybinding_Hint";
     pub const PREFER_LOW_POWER_GPU_FLAG: &str = "Prefer_Low_Power_GPU";
+    pub const FORCE_SOFTWARE_RENDERING_FLAG: &str = "Force_Software_Rendering";
     pub const INITIALIZATION_BLOCK_FLAG: &str = "Initialization_Block_Visible";
     pub const IN_BAND_COMMAND_BLOCKS_FLAG: &str = "In_Band_Command_Blocks_Visible";
     pub const RECORDING_MODE_FLAG: &str = "Recording_Mode_Enabled";

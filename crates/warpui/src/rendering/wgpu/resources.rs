@@ -287,17 +287,18 @@ async fn select_adapter(
 
     log::info!("Available wgpu adapters (in priority order):");
 
+    let force_software = std::env::var("WARP_FORCE_SOFTWARE")
+        .ok()
+        .is_some_and(|val| val == "1" || val.to_lowercase() == "true");
+
     let sorted_adapters = sort_adapters(
         adapters.collect(),
         backend_preference,
         &gpu_power_preference,
         windowing_system,
         downrank_non_nvidia_vulkan_adapters,
+        force_software,
     );
-
-    let force_software = std::env::var("WARP_FORCE_SOFTWARE")
-        .ok()
-        .is_some_and(|val| val == "1" || val.to_lowercase() == "true");
 
     let adapters = sorted_adapters
         // Filter out any unsupported adapters and log information about each one.
@@ -305,11 +306,12 @@ async fn select_adapter(
         .filter(|adapter| {
             if force_software {
                 let info = adapter.get_info();
-                let is_cpu = info.device_type == wgpu::DeviceType::Cpu
-                    || info.driver == "llvmpipe"
-                    || info.driver == "swrast";
+                let is_cpu = is_software_adapter(&info);
                 if !is_cpu {
-                    log::info!("Filtering out non-CPU adapter {:?} due to WARP_FORCE_SOFTWARE", info.name);
+                    log::info!(
+                        "Filtering out non-CPU adapter {:?} due to WARP_FORCE_SOFTWARE",
+                        info.name
+                    );
                 }
                 is_cpu
             } else {
@@ -348,6 +350,7 @@ pub(super) fn sort_adapters(
     gpu_power_preference: &GPUPowerPreference,
     windowing_system: Option<windowing::System>,
     downrank_non_nvidia_vulkan_adapters: bool,
+    force_software: bool,
 ) -> impl Iterator<Item = wgpu::Adapter> {
     adapters
         .into_iter()
@@ -355,7 +358,10 @@ pub(super) fn sort_adapters(
         .sorted_by_cached_key(|adapter| adapter_backend_sort_func(adapter, backend_preference))
         .sorted_by_cached_key(adapter_supported_features)
         // Sort adapters based on low/high power preferences.
-        .sorted_by_cached_key(power_preference_adapter_sort_func(gpu_power_preference))
+        .sorted_by_cached_key(power_preference_adapter_sort_func(
+            gpu_power_preference,
+            force_software,
+        ))
         // Sort adapters that we know have some issues towards the end of the list.
         .sorted_by_cached_key(|adapter| {
             adapter_stability_sort_func(
@@ -801,26 +807,21 @@ enum AdapterSupport {
 /// https://github.com/gfx-rs/wgpu/blob/v0.18/wgpu-core/src/instance.rs#L953-L954
 fn power_preference_adapter_sort_func(
     pref: &GPUPowerPreference,
+    force_software: bool,
 ) -> impl FnMut(&wgpu::Adapter) -> usize {
-    match pref {
-        GPUPowerPreference::LowPower => {
-            |adapter: &wgpu::Adapter| match adapter.get_info().device_type {
-                wgpu::DeviceType::Cpu => 0,
-                wgpu::DeviceType::IntegratedGpu => 1,
-                wgpu::DeviceType::DiscreteGpu => 2,
-                wgpu::DeviceType::Other => 3,
-                wgpu::DeviceType::VirtualGpu => 4,
-            }
-        }
-        GPUPowerPreference::HighPerformance => {
-            |adapter: &wgpu::Adapter| match adapter.get_info().device_type {
-                wgpu::DeviceType::Cpu => 0,
-                wgpu::DeviceType::DiscreteGpu => 1,
-                wgpu::DeviceType::IntegratedGpu => 2,
-                wgpu::DeviceType::Other => 3,
-                wgpu::DeviceType::VirtualGpu => 4,
-            }
-        }
+    let pref = *pref;
+    move |adapter: &wgpu::Adapter| match (pref, adapter.get_info().device_type) {
+        (_, wgpu::DeviceType::Cpu) if force_software => 0,
+        (GPUPowerPreference::LowPower, wgpu::DeviceType::IntegratedGpu) => 1,
+        (GPUPowerPreference::LowPower, wgpu::DeviceType::DiscreteGpu) => 2,
+        (GPUPowerPreference::LowPower, wgpu::DeviceType::Other) => 3,
+        (GPUPowerPreference::LowPower, wgpu::DeviceType::VirtualGpu) => 4,
+        (GPUPowerPreference::LowPower, wgpu::DeviceType::Cpu) => 5,
+        (GPUPowerPreference::HighPerformance, wgpu::DeviceType::DiscreteGpu) => 1,
+        (GPUPowerPreference::HighPerformance, wgpu::DeviceType::IntegratedGpu) => 2,
+        (GPUPowerPreference::HighPerformance, wgpu::DeviceType::Other) => 3,
+        (GPUPowerPreference::HighPerformance, wgpu::DeviceType::VirtualGpu) => 4,
+        (GPUPowerPreference::HighPerformance, wgpu::DeviceType::Cpu) => 5,
     }
 }
 
@@ -846,13 +847,7 @@ fn create_surface_config(
     }
 
     let info = adapter.get_info();
-    let driver_lower = info.driver.to_lowercase();
-    let is_software = driver_lower.contains("llvmpipe")
-        || driver_lower.contains("softpipe")
-        || info.name.to_lowercase().contains("llvmpipe")
-        || info.device_type == wgpu::DeviceType::Cpu;
-
-    if is_software {
+    if is_software_adapter(&info) {
         config.present_mode = PresentMode::Fifo;
     } else {
         // Use a non-vsync presentation mode for reduced input delay.  This could
@@ -881,6 +876,21 @@ fn create_surface_config(
     }
 
     Some(config)
+}
+
+fn is_software_adapter(adapter_info: &wgpu::AdapterInfo) -> bool {
+    let driver = adapter_info.driver.to_lowercase();
+    let name = adapter_info.name.to_lowercase();
+
+    adapter_info.device_type == wgpu::DeviceType::Cpu
+        || driver.contains("llvmpipe")
+        || driver.contains("softpipe")
+        || driver.contains("swrast")
+        || driver.contains("lavapipe")
+        || name.contains("llvmpipe")
+        || name.contains("softpipe")
+        || name.contains("swrast")
+        || name.contains("lavapipe")
 }
 
 #[derive(Error, Debug)]

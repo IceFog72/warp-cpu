@@ -870,56 +870,58 @@ impl Window {
             return Ok(());
         };
 
-        let mut inner = self.inner.borrow_mut();
-        let Some(inner) = inner.as_mut() else {
-            log::warn!("Tried to render a window before it had been fully initialized");
-            return Ok(());
-        };
-
-        let Some(RenderingResources {
-            resources,
-            renderer,
-        }) = inner.rendering_resources.as_mut()
-        else {
-            return Ok(());
-        };
-
-        let capture_callback = self.capture_callback.borrow_mut().take();
-        let window = &inner.window;
-        renderer.render(
-            scene.as_ref(),
-            resources,
-            &|glyph_key, scale, subpixel_alignment, glyph_config, format| {
-                font_cache.rasterized_glyph(
-                    glyph_key,
-                    scale,
-                    subpixel_alignment,
-                    glyph_config,
-                    format,
-                )
-            },
-            &|glyph_key, scale, alignment| {
-                font_cache.glyph_raster_bounds(glyph_key, scale, alignment)
-            },
-            inner.surface_size,
-            Some(Box::new(|| {
-                window.pre_present_notify();
-            })),
-            capture_callback,
-        )?;
-
-        #[cfg(windows)]
         {
-            use crate::windowing::winit::windows::WindowExt;
+            let mut inner_ref = self.inner.borrow_mut();
+            let Some(inner) = inner_ref.as_mut() else {
+                log::warn!("Tried to render a window before it had been fully initialized");
+                return Ok(());
+            };
 
-            // Uncloak the window upon successfully drawing a frame.
-            if inner.is_cloaked {
-                match inner.window.set_cloaked(false) {
-                    Ok(_) => {
-                        inner.is_cloaked = false;
-                    }
-                    Err(e) => {
-                        log::warn!("Failed to uncloak window: {e:#?}");
+            let Some(RenderingResources {
+                resources,
+                renderer,
+            }) = inner.rendering_resources.as_mut()
+            else {
+                return Ok(());
+            };
+
+            let capture_callback = self.capture_callback.borrow_mut().take();
+            let window = &inner.window;
+            renderer.render(
+                scene.as_ref(),
+                resources,
+                &|glyph_key, scale, subpixel_alignment, glyph_config, format| {
+                    font_cache.rasterized_glyph(
+                        glyph_key,
+                        scale,
+                        subpixel_alignment,
+                        glyph_config,
+                        format,
+                    )
+                },
+                &|glyph_key, scale, alignment| {
+                    font_cache.glyph_raster_bounds(glyph_key, scale, alignment)
+                },
+                inner.surface_size,
+                Some(Box::new(|| {
+                    window.pre_present_notify();
+                })),
+                capture_callback,
+            )?;
+
+            #[cfg(windows)]
+            {
+                use crate::windowing::winit::windows::WindowExt;
+
+                // Uncloak the window upon successfully drawing a frame.
+                if inner.is_cloaked {
+                    match inner.window.set_cloaked(false) {
+                        Ok(_) => {
+                            inner.is_cloaked = false;
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to uncloak window: {e:#?}");
+                        }
                     }
                 }
             }
@@ -927,7 +929,6 @@ impl Window {
 
         self.redraw_pending.set(false);
         drop(scene);
-        drop(inner);
         if self.needs_rebuild.get() {
             if let Some(inner) = self.inner.borrow_mut().as_mut() {
                 inner.window.request_redraw();

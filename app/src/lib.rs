@@ -910,6 +910,9 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
             private_preferences.deref()
         };
 
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    apply_software_rendering_environment(prefs_for_public_settings);
+
     #[cfg(enable_crash_recovery)]
     let crash_recovery =
         crash_recovery::CrashRecovery::new(&launch_mode, prefs_for_public_settings);
@@ -1054,6 +1057,46 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
 
         launch(ctx, app_state, launch_mode);
     })
+}
+
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn apply_software_rendering_environment(
+    prefs_for_public_settings: &dyn warpui_extras::user_preferences::UserPreferences,
+) {
+    use crate::settings::ForceSoftwareRendering;
+
+    let env_forces_software = std::env::var("WARP_FORCE_SOFTWARE")
+        .ok()
+        .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"));
+    let force_software = env_forces_software
+        || ForceSoftwareRendering::read_from_preferences(prefs_for_public_settings)
+            .unwrap_or_else(ForceSoftwareRendering::default_value);
+
+    if force_software {
+        std::env::set_var(
+            "__EGL_VENDOR_LIBRARY_FILENAMES",
+            "/usr/share/glvnd/egl_vendor.d/50_mesa.json",
+        );
+        std::env::set_var("LIBGL_ALWAYS_SOFTWARE", "1");
+        std::env::set_var("WGPU_BACKEND", "gl");
+        std::env::set_var("WARP_FORCE_SOFTWARE", "1");
+        std::env::set_var("MESA_LOADER_DRIVER_OVERRIDE", "kms_swrast");
+    } else {
+        remove_env_if_value(
+            "__EGL_VENDOR_LIBRARY_FILENAMES",
+            "/usr/share/glvnd/egl_vendor.d/50_mesa.json",
+        );
+        remove_env_if_value("LIBGL_ALWAYS_SOFTWARE", "1");
+        remove_env_if_value("WGPU_BACKEND", "gl");
+        remove_env_if_value("MESA_LOADER_DRIVER_OVERRIDE", "kms_swrast");
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn remove_env_if_value(key: &str, value: &str) {
+    if std::env::var(key).is_ok_and(|current| current == value) {
+        std::env::remove_var(key);
+    }
 }
 
 pub struct UpdateQuakeModeEventArg {

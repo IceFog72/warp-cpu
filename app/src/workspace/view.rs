@@ -19032,6 +19032,9 @@ impl Workspace {
         if *gpu_settings.prefer_low_power_gpu {
             context.set.insert(flags::PREFER_LOW_POWER_GPU_FLAG);
         }
+        if *gpu_settings.force_software_rendering {
+            context.set.insert(flags::FORCE_SOFTWARE_RENDERING_FLAG);
+        }
 
         let ai_settings = AISettings::as_ref(app);
         if ai_settings.is_ai_autodetection_enabled(app) {

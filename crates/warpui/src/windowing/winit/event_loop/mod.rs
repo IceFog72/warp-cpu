@@ -1039,11 +1039,12 @@ impl EventLoop {
 
         if let Some(interval) = self.min_frame_interval {
             let now = Instant::now();
-            let should_render = self.last_frame_time.map_or(true, |last| now - last >= interval);
-            if !should_render {
-                return;
+            if let Some(last) = self.last_frame_time {
+                if now - last < interval {
+                    std::thread::sleep(interval - (now - last));
+                }
             }
-            self.last_frame_time = Some(now);
+            self.last_frame_time = Some(Instant::now());
         }
 
         let render_result = (|| {

@@ -47,13 +47,13 @@ use crate::settings::{
     AutocompleteSymbols, AutosuggestionKeybindingHint, CloudPreferencesSettings, CodeSettings,
     CommandCorrections, CompletionsOpenWhileTyping, CopyOnSelect, CtrlTabBehavior,
     DefaultSessionMode, EnableSlashCommandsInTerminal, EnableSshWrapper, ErrorUnderliningEnabled,
-    ExtraMetaKeys, GPUSettings, GlobalHotkeyMode, InputSettings, InputSettingsChangedEvent,
-    LinuxSelectionClipboard, MiddleClickPasteEnabled, MouseScrollMultiplier,
-    OutlineCodebaseSymbolsForAtContextMenu, PreferLowPowerGPU, PreferredGraphicsBackend,
-    QuakeModeSettings, ScrollSettings, SelectionSettings, ShowAutosuggestionIgnoreButton,
-    ShowTerminalInputMessageBar, SshSettings, SyntaxHighlighting, TabBehavior, VimModeEnabled,
-    VimStatusBar, VimUnnamedSystemClipboard, DEFAULT_QUAKE_MODE_SIZE_PERCENTAGES,
-    QUAKE_WINDOW_AUTOHIDE_SUPPORTED,
+    ExtraMetaKeys, ForceSoftwareRendering, GPUSettings, GlobalHotkeyMode, InputSettings,
+    InputSettingsChangedEvent, LinuxSelectionClipboard, MiddleClickPasteEnabled,
+    MouseScrollMultiplier, OutlineCodebaseSymbolsForAtContextMenu, PreferLowPowerGPU,
+    PreferredGraphicsBackend, QuakeModeSettings, ScrollSettings, SelectionSettings,
+    ShowAutosuggestionIgnoreButton, ShowTerminalInputMessageBar, SshSettings, SyntaxHighlighting,
+    TabBehavior, VimModeEnabled, VimStatusBar, VimUnnamedSystemClipboard,
+    DEFAULT_QUAKE_MODE_SIZE_PERCENTAGES, QUAKE_WINDOW_AUTOHIDE_SUPPORTED,
 };
 use crate::terminal::alt_screen_reporting::{
     AltScreenReporting, FocusReportingEnabled, MouseReportingEnabled, ScrollReportingEnabled,
@@ -582,6 +582,22 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         );
     }
 
+    toggle_binding_pairs.push(
+        ToggleSettingActionPair::new(
+            &crate::t!("toggle-suffix-software-rendering"),
+            builder(SettingsAction::FeaturesPageToggle(
+                FeaturesPageAction::ToggleForceSoftwareRendering,
+            )),
+            context,
+            flags::FORCE_SOFTWARE_RENDERING_FLAG,
+        )
+        .is_supported_on_current_platform(
+            GPUSettings::as_ref(app)
+                .force_software_rendering
+                .is_supported_on_current_platform(),
+        ),
+    );
+
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     {
         if windowing_system_is_customizable(app) {
@@ -646,6 +662,7 @@ pub enum FeaturesPageAction {
     ToggleShowInputHintText,
     ToggleUseAudibleBell,
     ToggleShowTerminalZeroStateBlock,
+    ToggleForceSoftwareRendering,
     TogglePreferLowPowerGPU,
     ToggleVimMode,
     ToggleVimUnnamedSystemClipboard,
@@ -1131,6 +1148,13 @@ impl FeaturesPageAction {
                     value: to_string(*gpu_settings.prefer_low_power_gpu.value()),
                 }
             }
+            Self::ToggleForceSoftwareRendering => {
+                let gpu_settings = GPUSettings::as_ref(ctx);
+                TelemetryEvent::FeaturesPageAction {
+                    action: "ToggleForceSoftwareRendering".to_string(),
+                    value: to_string(*gpu_settings.force_software_rendering.value()),
+                }
+            }
             Self::SetPreferredGraphicsBackend(backend) => TelemetryEvent::FeaturesPageAction {
                 action: "SetPreferredGraphicsBackend".to_string(),
                 value: format!("{backend:?}"),
@@ -1293,6 +1317,7 @@ pub struct FeaturesPageView {
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     force_x11_changed: bool,
+    software_rendering_changed: bool,
     gpu_power_preference_changed: bool,
     graphics_backend_preference_changed: bool,
 }
@@ -1848,6 +1873,15 @@ impl TypedActionView for FeaturesPageView {
                     }
                 });
                 self.gpu_power_preference_changed = true;
+            }
+            ToggleForceSoftwareRendering => {
+                GPUSettings::handle(ctx).update(ctx, |gpu_settings, ctx| {
+                    report_if_error!(gpu_settings
+                        .force_software_rendering
+                        .toggle_and_save_value(ctx));
+                });
+                self.software_rendering_changed = true;
+                ctx.notify();
             }
             SetPreferredGraphicsBackend(graphics_backend) => {
                 GPUSettings::handle(ctx).update(ctx, |gpu_settings, ctx| {
@@ -2460,6 +2494,7 @@ impl FeaturesPageView {
 
             #[cfg(any(target_os = "linux", target_os = "freebsd"))]
             force_x11_changed: false,
+            software_rendering_changed: false,
             gpu_power_preference_changed: false,
             graphics_backend_preference_changed: false,
         };
@@ -2753,6 +2788,13 @@ impl FeaturesPageView {
         }
 
         let gpu_settings = GPUSettings::as_ref(ctx);
+        if gpu_settings
+            .force_software_rendering
+            .is_supported_on_current_platform()
+        {
+            system_widgets.push(Box::new(SoftwareRenderingWidget::default()));
+        }
+
         if gpu_settings
             .prefer_low_power_gpu
             .is_supported_on_current_platform()
@@ -7010,6 +7052,74 @@ impl SettingsWidget for LinuxSelectionClipboardWidget {
                 .finish(),
             None,
         )
+    }
+}
+
+#[derive(Default)]
+struct SoftwareRenderingWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for SoftwareRenderingWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "cpu software rendering llvmpipe gpu vram graphics"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let gpu_settings = GPUSettings::as_ref(app);
+        let mut col = Flex::column().with_child(render_body_item::<FeaturesPageAction>(
+            crate::t!("settings-features-force-software-rendering"),
+            None,
+            LocalOnlyIconState::for_setting(
+                ForceSoftwareRendering::storage_key(),
+                ForceSoftwareRendering::sync_to_cloud(),
+                &mut view
+                    .button_mouse_states
+                    .local_only_icon_tooltip_states
+                    .borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.switch_state.clone())
+                .check(*gpu_settings.force_software_rendering)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(FeaturesPageAction::ToggleForceSoftwareRendering)
+                })
+                .finish(),
+            None,
+        ));
+
+        let mut secondary_text =
+            crate::t!("settings-features-force-software-rendering-description");
+        if view.software_rendering_changed {
+            secondary_text.push_str("\n\n");
+            secondary_text.push_str(&crate::t!("settings-features-restart-warp-to-apply"));
+        }
+
+        let theme = appearance.theme();
+        col.add_child(
+            appearance
+                .ui_builder()
+                .wrappable_text(secondary_text, true)
+                .with_style(UiComponentStyles {
+                    font_color: Some(theme.sub_text_color(theme.background()).into_solid()),
+                    ..Default::default()
+                })
+                .build()
+                .finish(),
+        );
+        col.finish()
     }
 }
 

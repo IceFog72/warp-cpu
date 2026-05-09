@@ -155,6 +155,9 @@ pub async fn print_wgpu_adapters(
     let instance = get_wgpu_instance();
     let backends = wgpu_backend_options();
     let adapters = instance.enumerate_adapters(backends).await;
+    let force_software = std::env::var("WARP_FORCE_SOFTWARE")
+        .ok()
+        .is_some_and(|val| val == "1" || val.eq_ignore_ascii_case("true"));
 
     let sorted = resources::sort_adapters(
         adapters,
@@ -164,6 +167,7 @@ pub async fn print_wgpu_adapters(
         // This value is only ever true after failing to render frames, which we never attempt when
         // running in this mode.
         false, /* downrank_non_nvidia_vulkan_adapters */
+        force_software,
     );
 
     for adapter in sorted {

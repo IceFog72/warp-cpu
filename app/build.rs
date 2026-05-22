@@ -25,6 +25,11 @@ fn main() -> Result<()> {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_OS");
     println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_FAMILY");
+    println!("cargo:rerun-if-env-changed=GIT_RELEASE_TAG");
+    println!("cargo:rerun-if-changed=../.git/HEAD");
+    if let Some(version) = openwarp_build_version() {
+        println!("cargo:rustc-env=OPENWARP_BUILD_VERSION={version}");
+    }
 
     let target_os = env::var("CARGO_CFG_TARGET_OS")?;
     let target_family = env::var("CARGO_CFG_TARGET_FAMILY")?;
@@ -145,6 +150,29 @@ fn main() -> Result<()> {
     generate_channel_config_if_needed(&target_family, &target_os);
 
     Ok(())
+}
+
+fn openwarp_build_version() -> Option<String> {
+    if env::var("GIT_RELEASE_TAG")
+        .ok()
+        .is_some_and(|tag| !tag.is_empty())
+    {
+        return None;
+    }
+
+    let commit = Command::new("git")
+        .args(["rev-parse", "--short=8", "HEAD"])
+        .output()
+        .ok()
+        .and_then(|output| {
+            output
+                .status
+                .success()
+                .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        })
+        .filter(|commit| !commit.is_empty())?;
+
+    Some(format!("OpenWarp {}+{commit}", env!("CARGO_PKG_VERSION")))
 }
 
 /// If `warp-channel-config` is available on PATH and the `release_bundle` feature is enabled,

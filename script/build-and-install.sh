@@ -7,8 +7,10 @@
 #   ./script/build-and-install.sh --channel oss
 #
 # Environment variables:
-#   WARP_FORCE_SOFTWARE=1   Force CPU software rendering (llvmpipe)
-#   WARP_SOFTWARE_FPS=30    Cap FPS for software rendering (default 30)
+#   WARP_FORCE_SOFTWARE=1        Force CPU software rendering (llvmpipe)
+#   WARP_SOFTWARE_LOW_POWER=1    Enable software-rendering low-power throttles
+#   WARP_SOFTWARE_FPS=30         Cap FPS for software rendering
+#   WARP_SOFTWARE_TERMINAL_FPS=6 Cap terminal spinner/output redraw FPS
 #
 
 set -euo pipefail
@@ -79,7 +81,30 @@ echo ""
 echo "=== Installing to system ==="
 
 # Install binary
-sudo install -D "$EXECUTABLE_PATH" "/usr/local/bin/$DESKTOP_COMMAND"
+RUNTIME_COMMAND="/usr/local/bin/$DESKTOP_COMMAND"
+REAL_COMMAND="/usr/local/bin/$DESKTOP_COMMAND.real"
+sudo install -D "$EXECUTABLE_PATH" "$REAL_COMMAND"
+
+if [[ -n "${WARP_FORCE_SOFTWARE:-}" || -n "${WARP_SOFTWARE_LOW_POWER:-}" || -n "${WARP_SOFTWARE_FPS:-}" || -n "${WARP_SOFTWARE_TERMINAL_FPS:-}" ]]; then
+  WRAPPER_PATH="$(mktemp)"
+  cat > "$WRAPPER_PATH" <<EOF
+#!/usr/bin/env bash
+export WARP_FORCE_SOFTWARE="${WARP_FORCE_SOFTWARE:-}"
+export WARP_SOFTWARE_LOW_POWER="${WARP_SOFTWARE_LOW_POWER:-}"
+export WARP_SOFTWARE_FPS="${WARP_SOFTWARE_FPS:-}"
+export WARP_SOFTWARE_TERMINAL_FPS="${WARP_SOFTWARE_TERMINAL_FPS:-}"
+exec "$REAL_COMMAND" "\$@"
+EOF
+  chmod 755 "$WRAPPER_PATH"
+  sudo install -Dm755 "$WRAPPER_PATH" "$RUNTIME_COMMAND"
+  rm -f "$WRAPPER_PATH"
+  echo "  Installed runtime wrapper: $RUNTIME_COMMAND"
+  echo "  Installed executable: $REAL_COMMAND"
+else
+  sudo ln -sf "$REAL_COMMAND" "$RUNTIME_COMMAND"
+  echo "  Installed executable: $REAL_COMMAND"
+  echo "  Installed runtime symlink: $RUNTIME_COMMAND"
+fi
 sudo ln -sf "/usr/local/bin/$DESKTOP_COMMAND" "/usr/local/bin/$BINARY_NAME"
 echo "  Installed binary: /usr/local/bin/$DESKTOP_COMMAND"
 echo "  Installed compatibility symlink: /usr/local/bin/$BINARY_NAME"

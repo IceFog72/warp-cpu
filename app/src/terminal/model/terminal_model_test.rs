@@ -931,3 +931,35 @@ fn test_synchronized_output_sharing_session_split_batch() {
     };
     assert_eq!(bytes.as_slice(), b"after");
 }
+
+#[test]
+fn classifies_carriage_return_spinner_output_as_ephemeral() {
+    assert_eq!(
+        classify_terminal_output_shape(b"\r.\r.."),
+        TerminalOutputShape::EphemeralSameLine
+    );
+}
+
+#[test]
+fn classifies_backspace_spinner_output_as_ephemeral() {
+    assert_eq!(
+        classify_terminal_output_shape(b"loading\x08\x08"),
+        TerminalOutputShape::EphemeralSameLine
+    );
+}
+
+#[test]
+fn classifies_large_output_as_bulk() {
+    assert_eq!(
+        classify_terminal_output_shape(&[b'x'; 4096]),
+        TerminalOutputShape::Bulk
+    );
+}
+
+#[test]
+fn classifies_newline_heavy_output_as_bulk() {
+    assert_eq!(
+        classify_terminal_output_shape(b"one\ntwo\nthree\n"),
+        TerminalOutputShape::Bulk
+    );
+}

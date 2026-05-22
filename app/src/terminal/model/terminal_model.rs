@@ -450,6 +450,36 @@ impl TmuxControlModeContext {
     }
 }
 
+/// 描述终端输出的形状，用于低CPU软件渲染时决定是否可以跳过帧。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TerminalOutputShape {
+    /// 未知/默认（无输出或无法分类）。
+    Unknown,
+    /// 批量输出（多行或大量字节），需要完整渲染。
+    Bulk,
+    /// 同行短暂更新，如 spinner（含 `\r` 或退格），可以节流跳帧。
+    EphemeralSameLine,
+}
+
+/// 根据原始 PTY 字节对输出形状进行分类。
+///
+/// - 空字节 → `Unknown`
+/// - ≥ 4096 字节 或 ≥ 2 个换行符 → `Bulk`
+/// - ≤ 64 字节且含 `\r` 或退格（0x08）→ `EphemeralSameLine`
+/// - 其余 → `Bulk`
+pub fn classify_terminal_output_shape(bytes: &[u8]) -> TerminalOutputShape {
+    if bytes.is_empty() {
+        return TerminalOutputShape::Unknown;
+    }
+    if bytes.len() >= 4096 || bytes.iter().filter(|b| **b == b'\n').count() >= 2 {
+        return TerminalOutputShape::Bulk;
+    }
+    if bytes.len() <= 64 && bytes.iter().any(|b| matches!(*b, b'\r' | 0x08)) {
+        return TerminalOutputShape::EphemeralSameLine;
+    }
+    TerminalOutputShape::Bulk
+}
+
 pub struct TerminalModel {
     /// For fullscreen programs like vim.
     alt_screen: AltScreen,
@@ -510,6 +540,11 @@ pub struct TerminalModel {
     /// A generation counter that is incremented every time the terminal model is modified.
     /// This is used to implement demand-driven rendering.
     generation: std::sync::atomic::AtomicU64,
+
+    /// 最近一次字节处理的输出形状分类，用于软件渲染节流。
+    last_output_shape: TerminalOutputShape,
+    /// 设置 `last_output_shape` 时对应的 generation 值。
+    last_output_shape_generation: u64,
 
     /// Partially populated `SessionInfo` from the `InitShell` DCS payload.
     ///
@@ -1174,6 +1209,8 @@ impl TerminalModel {
             image_id_to_metadata: HashMap::new(),
             // Start mid-way through the u32 range to avoid collisions
             next_kitty_image_id: 2147483647,
+            last_output_shape: TerminalOutputShape::Unknown,
+            last_output_shape_generation: 0,
         }
     }
 
@@ -1693,6 +1730,16 @@ impl TerminalModel {
     pub fn increment_generation(&self) {
         self.generation
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// 返回最近一次字节处理的输出形状分类。
+    pub fn output_shape(&self) -> TerminalOutputShape {
+        self.last_output_shape
+    }
+
+    /// 返回设置最近输出形状时对应的 generation 值。
+    pub fn output_shape_generation(&self) -> u64 {
+        self.last_output_shape_generation
     }
 
     /// Starts the active block and resets block-to-block state. For local sessions, this is called
@@ -3123,6 +3170,9 @@ impl ansi::Handler for TerminalModel {
 
     fn on_finish_byte_processing(&mut self, input: &ansi::ProcessorInput<'_>) {
         self.increment_generation();
+        let bytes = input.bytes();
+        self.last_output_shape = classify_terminal_output_shape(bytes);
+        self.last_output_shape_generation = self.generation();
         if let Some(SshLogin {
             notification_state, ..
         }) = &self.notify_on_end_of_ssh_login
@@ -3135,8 +3185,6 @@ impl ansi::Handler for TerminalModel {
                 self.check_for_end_of_ssh_login(false);
             }
         }
-
-        let bytes = input.bytes();
 
         // Send a copy of the bytes to subscribers.
         self.event_proxy.send_pty_read_event(bytes);
@@ -3662,6 +3710,46 @@ pub enum ExitReason {
     ProcessKilled,
     /// Shell could not be found/determined
     ShellNotFound,
+}
+
+/// Classifies terminal output into categories for frame pacing decisions.
+///
+/// Used in software rendering low-CPU mode to distinguish between:
+/// - Ephemeral same-line output (spinner dots, progress indicators)
+/// - Bulk output (file listings, build output)
+/// - Unknown patterns
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TerminalOutputShape {
+    /// Pattern not yet classified or unknown pattern.
+    Unknown,
+    /// Large output or multi-line (e.g., bulk file listings, build output).
+    Bulk,
+    /// Small output using carriage returns or backspaces on same line (spinners, progress dots).
+    EphemeralSameLine,
+}
+
+/// Classify a byte sequence into output shape for frame-pacing hints.
+///
+/// Returns:
+/// - `Bulk` if output is >= 4096 bytes or contains 2+ newlines.
+/// - `EphemeralSameLine` if output is small and contains carriage returns (`\r`) or backspaces (`\x08`).
+/// - `Unknown` otherwise.
+pub fn classify_terminal_output_shape(bytes: &[u8]) -> TerminalOutputShape {
+    if bytes.is_empty() {
+        return TerminalOutputShape::Unknown;
+    }
+
+    // Classify as bulk if large or multi-line.
+    if bytes.len() >= 4096 || bytes.iter().filter(|b| **b == b'\n').count() >= 2 {
+        return TerminalOutputShape::Bulk;
+    }
+
+    // Classify as ephemeral same-line if small and contains CR or backspace.
+    if bytes.len() <= 64 && bytes.iter().any(|b| matches!(*b, b'\r' | 0x08)) {
+        return TerminalOutputShape::EphemeralSameLine;
+    }
+
+    TerminalOutputShape::Bulk
 }
 
 #[cfg(test)]

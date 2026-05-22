@@ -69,6 +69,14 @@ const MAX_TAP_DISTANCE: f64 = 18.;
 const LONG_PRESS_DURATION: Duration = Duration::from_millis(500);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SoftwareFrameClass {
+    Idle,
+    TerminalSteady,
+    Interactive,
+    Burst,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SoftwareFramePolicy {
     idle_interval: Option<Duration>,
     terminal_interval: Option<Duration>,
@@ -108,6 +116,15 @@ impl SoftwareFramePolicy {
                 .or(legacy_fps)
                 .or(Some(30))
                 .and_then(frame_interval_for_fps),
+        }
+    }
+
+    fn interval_for_class(&self, frame_class: SoftwareFrameClass) -> Option<Duration> {
+        match frame_class {
+            SoftwareFrameClass::Idle => self.idle_interval,
+            SoftwareFrameClass::TerminalSteady => self.terminal_interval,
+            SoftwareFrameClass::Interactive => self.interactive_interval,
+            SoftwareFrameClass::Burst => self.burst_interval,
         }
     }
 }
@@ -569,9 +586,10 @@ pub(super) struct EventLoop {
     /// Soft keyboard manager for mobile WASM.
     #[cfg(target_family = "wasm")]
     soft_keyboard_manager: Option<std::rc::Rc<crate::platform::wasm::SoftKeyboardManager>>,
-    /// Minimum interval between frames when software rendering, to reduce CPU usage.
-    /// `None` means no frame limiting (hardware GPU path).
-    min_frame_interval: Option<Duration>,
+    /// Frame pacing policy for software rendering. `None` intervals mean no frame limiting.
+    software_frame_policy: SoftwareFramePolicy,
+    current_frame_class: SoftwareFrameClass,
+    burst_until: Option<Instant>,
     /// Timestamp of the last completed frame.
     last_frame_time: Option<Instant>,
 }
@@ -584,7 +602,7 @@ impl EventLoop {
         window_class: Option<String>,
         proxy: EventLoopProxy<CustomEvent>,
     ) -> Self {
-        let min_frame_interval = Self::compute_min_frame_interval();
+        let software_frame_policy = Self::compute_software_frame_policy();
 
         Self {
             ui_app: ui_app.clone(),
@@ -595,14 +613,16 @@ impl EventLoop {
             proxy,
             ime_enabled: false,
             downrank_non_nvidia_vulkan_adapters: false,
-            min_frame_interval,
+            software_frame_policy,
+            current_frame_class: SoftwareFrameClass::Idle,
+            burst_until: None,
             last_frame_time: None,
             #[cfg(target_family = "wasm")]
             soft_keyboard_manager: None,
         }
     }
 
-    fn compute_min_frame_interval() -> Option<Duration> {
+    fn compute_software_frame_policy() -> SoftwareFramePolicy {
         let force_software = std::env::var("WARP_FORCE_SOFTWARE")
             .ok()
             .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
@@ -627,7 +647,44 @@ impl EventLoop {
             env_fps("WARP_SOFTWARE_BURST_FPS"),
         );
 
-        policy.terminal_interval
+        policy
+    }
+
+    fn set_frame_class(&mut self, frame_class: SoftwareFrameClass) {
+        self.current_frame_class = frame_class;
+    }
+
+    fn start_burst(&mut self, duration: Duration) {
+        self.current_frame_class = SoftwareFrameClass::Burst;
+        self.burst_until = Some(Instant::now() + duration);
+    }
+
+    fn current_frame_interval(&mut self) -> Option<Duration> {
+        if self.current_frame_class == SoftwareFrameClass::Burst {
+            match self.burst_until {
+                Some(burst_until) if Instant::now() < burst_until => {}
+                Some(_) | None => {
+                    self.burst_until = None;
+                    self.current_frame_class = SoftwareFrameClass::TerminalSteady;
+                }
+            }
+        }
+
+        self.software_frame_policy
+            .interval_for_class(self.current_frame_class)
+    }
+
+    fn update_frame_class_for_window_event(&mut self, event: &WindowEvent) {
+        match event {
+            WindowEvent::Resized(_)
+            | WindowEvent::ScaleFactorChanged { .. }
+            | WindowEvent::MouseWheel { .. } => self.start_burst(Duration::from_millis(300)),
+            WindowEvent::KeyboardInput { .. }
+            | WindowEvent::Ime(_)
+            | WindowEvent::MouseInput { .. }
+            | WindowEvent::Touch(_) => self.set_frame_class(SoftwareFrameClass::Interactive),
+            _ => {}
+        }
     }
 
     /// Handles a single [`winit::event::Event`].
@@ -1096,7 +1153,7 @@ impl EventLoop {
             })
         }
 
-        if let Some(interval) = self.min_frame_interval {
+        if let Some(interval) = self.current_frame_interval() {
             let now = Instant::now();
             if let Some(last) = self.last_frame_time {
                 if now - last < interval {
@@ -1147,6 +1204,8 @@ impl EventLoop {
 
     /// Handles a [`winit::event::WindowEvent`].
     fn handle_window_event(&mut self, window_id: winit::window::WindowId, evt: WindowEvent) {
+        self.update_frame_class_for_window_event(&evt);
+
         let Some(event) = self.convert_window_event(window_id, evt) else {
             return;
         };
@@ -2204,5 +2263,28 @@ mod software_frame_policy_tests {
         assert_eq!(policy.terminal_interval, None);
         assert_eq!(policy.interactive_interval, None);
         assert_eq!(policy.burst_interval, None);
+    }
+
+    #[test]
+    fn interval_for_class_uses_matching_policy_value() {
+        let policy =
+            SoftwareFramePolicy::from_fps_values(true, None, Some(1), Some(5), Some(10), Some(20));
+
+        assert_eq!(
+            policy.interval_for_class(SoftwareFrameClass::Idle),
+            Some(Duration::from_millis(1000))
+        );
+        assert_eq!(
+            policy.interval_for_class(SoftwareFrameClass::TerminalSteady),
+            Some(Duration::from_millis(200))
+        );
+        assert_eq!(
+            policy.interval_for_class(SoftwareFrameClass::Interactive),
+            Some(Duration::from_millis(100))
+        );
+        assert_eq!(
+            policy.interval_for_class(SoftwareFrameClass::Burst),
+            Some(Duration::from_millis(50))
+        );
     }
 }

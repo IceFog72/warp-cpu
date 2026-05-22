@@ -68,6 +68,61 @@ const MAX_TAP_DISTANCE: f64 = 18.;
 /// Matches the iOS and Android platform default of 500ms.
 const LONG_PRESS_DURATION: Duration = Duration::from_millis(500);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SoftwareFramePolicy {
+    idle_interval: Option<Duration>,
+    terminal_interval: Option<Duration>,
+    interactive_interval: Option<Duration>,
+    burst_interval: Option<Duration>,
+}
+
+impl SoftwareFramePolicy {
+    fn from_fps_values(
+        is_software: bool,
+        legacy_fps: Option<u64>,
+        idle_fps: Option<u64>,
+        terminal_fps: Option<u64>,
+        interactive_fps: Option<u64>,
+        burst_fps: Option<u64>,
+    ) -> Self {
+        if !is_software && legacy_fps.is_none() {
+            return Self {
+                idle_interval: None,
+                terminal_interval: None,
+                interactive_interval: None,
+                burst_interval: None,
+            };
+        }
+
+        Self {
+            idle_interval: idle_fps.and_then(frame_interval_for_fps),
+            terminal_interval: terminal_fps
+                .or(legacy_fps)
+                .or(Some(6))
+                .and_then(frame_interval_for_fps),
+            interactive_interval: interactive_fps
+                .or(legacy_fps)
+                .or(Some(12))
+                .and_then(frame_interval_for_fps),
+            burst_interval: burst_fps
+                .or(legacy_fps)
+                .or(Some(30))
+                .and_then(frame_interval_for_fps),
+        }
+    }
+}
+
+fn frame_interval_for_fps(fps: u64) -> Option<Duration> {
+    (fps > 0).then(|| Duration::from_millis((1000 / fps).max(1)))
+}
+
+fn env_fps(name: &str) -> Option<u64> {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|fps| *fps > 0)
+}
+
 /// Momentum scrolling configuration. Math is as follows:
 /// Each tick (every MOMENTUM_FRAME_INTERVAL):
 ///
@@ -562,13 +617,17 @@ impl EventLoop {
 
         let is_software = force_software || libgl_software || wgpu_gl_backend;
 
-        let fps = std::env::var("WARP_SOFTWARE_FPS")
-            .ok()
-            .and_then(|v| v.parse::<u32>().ok())
-            .or(if is_software { Some(30) } else { None })
-            .map(|v| v.clamp(1, 120));
+        let legacy_fps = env_fps("WARP_SOFTWARE_FPS");
+        let policy = SoftwareFramePolicy::from_fps_values(
+            is_software,
+            legacy_fps,
+            env_fps("WARP_SOFTWARE_IDLE_FPS"),
+            env_fps("WARP_SOFTWARE_TERMINAL_FPS"),
+            env_fps("WARP_SOFTWARE_INTERACTIVE_FPS"),
+            env_fps("WARP_SOFTWARE_BURST_FPS"),
+        );
 
-        fps.map(|fps| Duration::from_secs_f64(1.0 / fps as f64))
+        policy.terminal_interval
     }
 
     /// Handles a single [`winit::event::Event`].
@@ -2092,4 +2151,58 @@ fn downcast_window(window: &dyn platform::Window) -> &super::Window {
         .as_any()
         .downcast_ref::<super::Window>()
         .expect("Should not fail to downcast the platform window to its concrete type")
+}
+
+#[cfg(test)]
+mod software_frame_policy_tests {
+    use super::*;
+
+    #[test]
+    fn software_defaults_to_low_power_intervals() {
+        let policy = SoftwareFramePolicy::from_fps_values(true, None, None, None, None, None);
+
+        assert_eq!(policy.idle_interval, None);
+        assert_eq!(policy.terminal_interval, Some(Duration::from_millis(166)));
+        assert_eq!(policy.interactive_interval, Some(Duration::from_millis(83)));
+        assert_eq!(policy.burst_interval, Some(Duration::from_millis(33)));
+    }
+
+    #[test]
+    fn legacy_fps_applies_to_all_active_software_classes() {
+        let policy = SoftwareFramePolicy::from_fps_values(true, Some(10), None, None, None, None);
+
+        assert_eq!(policy.terminal_interval, Some(Duration::from_millis(100)));
+        assert_eq!(
+            policy.interactive_interval,
+            Some(Duration::from_millis(100))
+        );
+        assert_eq!(policy.burst_interval, Some(Duration::from_millis(100)));
+    }
+
+    #[test]
+    fn specific_fps_overrides_legacy_fps() {
+        let policy = SoftwareFramePolicy::from_fps_values(
+            true,
+            Some(10),
+            Some(2),
+            Some(5),
+            Some(20),
+            Some(40),
+        );
+
+        assert_eq!(policy.idle_interval, Some(Duration::from_millis(500)));
+        assert_eq!(policy.terminal_interval, Some(Duration::from_millis(200)));
+        assert_eq!(policy.interactive_interval, Some(Duration::from_millis(50)));
+        assert_eq!(policy.burst_interval, Some(Duration::from_millis(25)));
+    }
+
+    #[test]
+    fn hardware_policy_does_not_limit_frames_without_explicit_fps() {
+        let policy = SoftwareFramePolicy::from_fps_values(false, None, None, None, None, None);
+
+        assert_eq!(policy.idle_interval, None);
+        assert_eq!(policy.terminal_interval, None);
+        assert_eq!(policy.interactive_interval, None);
+        assert_eq!(policy.burst_interval, None);
+    }
 }

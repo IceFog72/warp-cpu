@@ -2503,6 +2503,7 @@ pub struct TerminalView {
     last_rendered_generation: u64,
     last_software_terminal_notify: Option<Instant>,
     pending_software_terminal_notify: bool,
+    is_in_active_tab: bool,
 
     /// Set of block indexes that are bookmarked, including the mouse states for their indicators
     bookmarked_blocks: HashMap<BlockIndex, MouseStateHandle>,
@@ -4121,6 +4122,7 @@ impl TerminalView {
             last_rendered_generation: 0,
             last_software_terminal_notify: None,
             pending_software_terminal_notify: false,
+            is_in_active_tab: true,
             shell_indicator_type: None,
             shell_detail: None,
             position_id: format!("terminal_view_{}", ctx.view_id()),
@@ -7901,6 +7903,10 @@ impl TerminalView {
     /// This function is invoked every time there is some form of view event
     /// such as a state change or terminal wakeup to update the view context.
     fn handle_terminal_wakeup(&mut self, _: (), ctx: &mut ViewContext<Self>) {
+        if !self.is_in_active_tab {
+            return;
+        }
+
         let mut model = if let Some(model) = self.model.try_lock() {
             model
         } else {
@@ -14890,6 +14896,17 @@ impl TerminalView {
 
     pub fn mark_as_visible(&mut self) {
         self.was_ever_visible = true;
+    }
+
+    pub fn set_is_in_active_tab(&mut self, is_in_active_tab: bool, ctx: &mut ViewContext<Self>) {
+        if self.is_in_active_tab == is_in_active_tab {
+            return;
+        }
+
+        self.is_in_active_tab = is_in_active_tab;
+        if is_in_active_tab {
+            self.handle_terminal_wakeup((), ctx);
+        }
     }
 
     pub fn set_active_session_state(

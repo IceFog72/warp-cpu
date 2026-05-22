@@ -6054,6 +6054,14 @@ impl PaneGroup {
         }
     }
 
+    pub fn set_is_in_active_tab(&mut self, is_in_active_tab: bool, ctx: &mut ViewContext<Self>) {
+        for session in self.panes_of::<TerminalPane>() {
+            session.terminal_view(ctx).update(ctx, |view, ctx| {
+                view.set_is_in_active_tab(is_in_active_tab, ctx);
+            });
+        }
+    }
+
     pub fn focus(&mut self, ctx: &mut ViewContext<Self>) {
         self.update_session_visibility(ctx);
 

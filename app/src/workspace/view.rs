@@ -4883,7 +4883,21 @@ impl Workspace {
             index
         };
 
+        let old_active_tab_index = self.active_tab_index;
+        if old_active_tab_index != index {
+            if let Some(old_pane_group) = self.get_pane_group_view(old_active_tab_index).cloned() {
+                old_pane_group.update(ctx, |pane_group, ctx| {
+                    pane_group.set_is_in_active_tab(false, ctx);
+                });
+            }
+        }
+
         self.active_tab_index = index;
+        self.active_tab_pane_group()
+            .clone()
+            .update(ctx, |pane_group, ctx| {
+                pane_group.set_is_in_active_tab(true, ctx);
+            });
 
         if self.vertical_tabs_panel_open
             && FeatureFlag::VerticalTabs.is_enabled()

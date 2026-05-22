@@ -455,7 +455,10 @@ use crate::server::{
     },
 };
 use crate::session_management::{CommandContext, SessionNavigationPromptElements};
-use crate::settings::{PrivacySettings, PrivacySettingsChangedEvent, PrivacySettingsSnapshot};
+use crate::settings::{
+    software_low_power_rendering_enabled, software_terminal_frame_interval, PrivacySettings,
+    PrivacySettingsChangedEvent, PrivacySettingsSnapshot,
+};
 use crate::terminal::alt_screen::alt_screen_element::AltScreenElement;
 use crate::terminal::block_list_element::{
     render_hoverable_block_button, BlockListElement, BlockListMouseStates, BlockSelectAction,
@@ -479,7 +482,7 @@ use crate::terminal::model::index::{Point, Side};
 use crate::terminal::model::mouse::MouseState;
 use crate::terminal::model::selection::{SelectAction, SelectionDirection};
 use crate::terminal::model::session::{BootstrapSessionType, SessionType, Sessions, SessionsEvent};
-use crate::terminal::model::terminal_model::{BlockIndex, TerminalInputState};
+use crate::terminal::model::terminal_model::{BlockIndex, TerminalInputState, TerminalOutputShape};
 use crate::terminal::model::terminal_model::{
     BlockSelectionCardinality, SelectedBlocks, WithinModel,
 };
@@ -2498,6 +2501,8 @@ pub struct TerminalView {
     /// Most recent command correction encountered, if any, used for the keyboard shortcut action.
     most_recent_command_correction: Option<Correction>,
     last_rendered_generation: u64,
+    last_software_terminal_notify: Option<Instant>,
+    pending_software_terminal_notify: bool,
 
     /// Set of block indexes that are bookmarked, including the mouse states for their indicators
     bookmarked_blocks: HashMap<BlockIndex, MouseStateHandle>,
@@ -4114,6 +4119,8 @@ impl TerminalView {
             ssh_file_upload,
             most_recent_command_correction: None,
             last_rendered_generation: 0,
+            last_software_terminal_notify: None,
+            pending_software_terminal_notify: false,
             shell_indicator_type: None,
             shell_detail: None,
             position_id: format!("terminal_view_{}", ctx.view_id()),
@@ -7905,7 +7912,25 @@ impl TerminalView {
         if current_generation == self.last_rendered_generation {
             return;
         }
+        if let Some(delay) = self.software_terminal_wakeup_delay(&model, current_generation) {
+            drop(model);
+            if !self.pending_software_terminal_notify {
+                self.pending_software_terminal_notify = true;
+                let _ = ctx.spawn(
+                    async move {
+                        Timer::after(delay).await;
+                    },
+                    |view, (), ctx| {
+                        view.pending_software_terminal_notify = false;
+                        view.handle_terminal_wakeup((), ctx);
+                    },
+                );
+            }
+            return;
+        }
         self.last_rendered_generation = current_generation;
+        self.last_software_terminal_notify = Some(Instant::now());
+        self.pending_software_terminal_notify = false;
 
         // If find bar is active, we update the matches for the last/active block or the alt screen.
         if self.find_model.as_ref(ctx).is_find_bar_open() {
@@ -7974,6 +7999,27 @@ impl TerminalView {
 
             send_telemetry_from_ctx!(TelemetryEvent::SSHControlMasterError, ctx);
         }
+    }
+
+    fn software_terminal_wakeup_delay(
+        &self,
+        model: &super::model::TerminalModel,
+        current_generation: u64,
+    ) -> Option<Duration> {
+        if !software_low_power_rendering_enabled() {
+            return None;
+        }
+        if model.output_shape() != TerminalOutputShape::EphemeralSameLine
+            || model.output_shape_generation() != current_generation
+        {
+            return None;
+        }
+
+        let interval = software_terminal_frame_interval();
+        let Some(last_notify) = self.last_software_terminal_notify else {
+            return None;
+        };
+        interval.checked_sub(last_notify.elapsed())
     }
 
     fn read_from_clipboard(

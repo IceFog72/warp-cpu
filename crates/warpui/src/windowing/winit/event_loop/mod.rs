@@ -995,6 +995,22 @@ impl EventLoop {
                 event: WindowEvent::RedrawRequested,
             } => self.redraw_window(window_id, window_target),
             Event::WindowEvent {
+                window_id,
+                event: WindowEvent::Occluded(occluded),
+            } => {
+                let Some(window_state) = self.state.windows.get(&window_id) else {
+                    return;
+                };
+                let Some(window) = self
+                    .ui_app
+                    .read(|ctx| ctx.windows().platform_window(window_state.window_id))
+                else {
+                    return;
+                };
+                let window = downcast_window(window.as_ref());
+                window.set_occluded(occluded);
+            }
+            Event::WindowEvent {
                 window_id: winit_window_id,
                 event: WindowEvent::CloseRequested,
             } => {
@@ -1135,6 +1151,9 @@ impl EventLoop {
         };
 
         let window = downcast_window(window.as_ref());
+        if !window.is_drawable() {
+            return;
+        }
 
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         if crate::windowing::winit::linux::take_encountered_bad_match_from_dri3_fence_from_fd() {

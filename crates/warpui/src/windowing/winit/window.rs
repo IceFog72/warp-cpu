@@ -704,6 +704,7 @@ struct Inner {
     active_drag_resize_direction: Option<ResizeDirection>,
     surface_size: Vector2F,
     surface_requires_reconfiguration: bool,
+    is_occluded: bool,
     /// The window level isn't just needed at window creation. The window level may get un-set in
     /// some desktop environments, e.g. when the window is hidden and un-hidden. We don't want this
     /// behavior, and so we must re-set the window level. In order to re-set it, we must store the
@@ -808,6 +809,7 @@ impl Window {
             active_drag_resize_direction: None,
             surface_size: initial_surface_size,
             surface_requires_reconfiguration: false,
+            is_occluded: false,
             level: window_level_for_style(window_options.style),
         }));
         Ok(window_id)
@@ -930,9 +932,7 @@ impl Window {
         self.redraw_pending.set(false);
         drop(scene);
         if self.needs_rebuild.get() {
-            if let Some(inner) = self.inner.borrow_mut().as_mut() {
-                inner.window.request_redraw();
-            }
+            self.request_redraw_if_visible();
         }
         Ok(())
     }
@@ -1207,6 +1207,9 @@ impl Window {
         if let Some(Inner { window, level, .. }) = self.inner.borrow().as_ref() {
             window.set_visible(visible);
             window.set_window_level(*level);
+        }
+        if visible && (self.needs_rebuild.get() || self.scene.borrow().is_some()) {
+            self.request_redraw_if_visible();
         }
     }
 
@@ -1727,22 +1730,12 @@ impl platform::WindowContext for Window {
     fn render_scene(&self, scene: Rc<Scene>) {
         self.scene.borrow_mut().replace(scene);
         self.needs_rebuild.set(false);
-        if let Some(inner) = self.inner.borrow_mut().as_mut() {
-            if !self.redraw_pending.get() {
-                self.redraw_pending.set(true);
-                inner.window.request_redraw();
-            }
-        }
+        self.request_redraw_if_visible();
     }
 
     fn request_redraw(&self) {
         self.needs_rebuild.set(true);
-        if let Some(inner) = self.inner.borrow_mut().as_mut() {
-            if !self.redraw_pending.get() {
-                self.redraw_pending.set(true);
-                inner.window.request_redraw();
-            }
-        }
+        self.request_redraw_if_visible();
     }
 
     fn request_frame_capture(
@@ -1750,11 +1743,38 @@ impl platform::WindowContext for Window {
         callback: Box<dyn FnOnce(platform::CapturedFrame) + Send + 'static>,
     ) {
         *self.capture_callback.borrow_mut() = Some(callback);
+        self.request_redraw_if_visible();
+    }
+}
+
+impl Window {
+    pub(super) fn is_drawable(&self) -> bool {
+        self.inner
+            .borrow()
+            .as_ref()
+            .is_some_and(|inner| !inner.is_occluded && inner.window.is_visible().unwrap_or(true))
+    }
+
+    pub(super) fn set_occluded(&self, occluded: bool) {
         if let Some(inner) = self.inner.borrow_mut().as_mut() {
-            if !self.redraw_pending.get() {
-                self.redraw_pending.set(true);
-                inner.window.request_redraw();
+            inner.is_occluded = occluded;
+        }
+        if !occluded && (self.needs_rebuild.get() || self.scene.borrow().is_some()) {
+            self.request_redraw_if_visible();
+        }
+    }
+
+    fn request_redraw_if_visible(&self) {
+        if self.redraw_pending.get() {
+            return;
+        }
+
+        if let Some(inner) = self.inner.borrow_mut().as_mut() {
+            if inner.is_occluded || !inner.window.is_visible().unwrap_or(true) {
+                return;
             }
+            self.redraw_pending.set(true);
+            inner.window.request_redraw();
         }
     }
 }

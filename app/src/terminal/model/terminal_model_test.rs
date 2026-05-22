@@ -963,3 +963,26 @@ fn classifies_newline_heavy_output_as_bulk() {
         TerminalOutputShape::Bulk
     );
 }
+
+#[test]
+fn tracks_output_shape_after_processing_spinner_bytes() {
+    let mut terminal = TerminalModel::mock(None, None);
+
+    terminal.process_bytes(b"\r.\r..");
+
+    assert_eq!(terminal.output_shape(), TerminalOutputShape::EphemeralSameLine);
+    assert_eq!(terminal.output_shape_generation(), terminal.generation());
+}
+
+#[test]
+fn updates_output_shape_when_later_output_is_bulk() {
+    let mut terminal = TerminalModel::mock(None, None);
+    terminal.process_bytes(b"\r.\r..");
+    let spinner_generation = terminal.output_shape_generation();
+
+    terminal.process_bytes(b"one\ntwo\nthree\n");
+
+    assert_eq!(terminal.output_shape(), TerminalOutputShape::Bulk);
+    assert!(terminal.output_shape_generation() > spinner_generation);
+    assert_eq!(terminal.output_shape_generation(), terminal.generation());
+}

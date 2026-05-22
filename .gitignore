@@ -72,3 +72,5 @@ __pycache__/
 .note/
 perf.data.old
 perf.data
+.codegraph/
+.agent/

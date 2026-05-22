@@ -22,7 +22,7 @@ pub fn initialize_settings_for_tests_with_mode(
             manager::SettingsManager, AISettings, AccessibilitySettings, AliasExpansionSettings,
             AppEditorSettings, BlockVisibilitySettings, CloudPreferencesSettings, CodeSettings,
             DebugSettings, EmacsBindingsSettings, FontSettings, GPUSettings, InputModeSettings,
-            InputSettings, NativePreferenceSettings, PaneSettings, SameLinePromptBlockSettings,
+            InputSettings, LanguageSettings, NativePreferenceSettings, PaneSettings, SameLinePromptBlockSettings,
             ScrollSettings, SelectionSettings, SshSettings, ThemeSettings, VimBannerSettings,
         },
         terminal::{
@@ -68,6 +68,7 @@ pub fn initialize_settings_for_tests_with_mode(
     InputModeSettings::register(app);
     InputSettings::register(app);
     KeysSettings::register(app);
+    LanguageSettings::register(app);
     LigatureSettings::register(app);
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]

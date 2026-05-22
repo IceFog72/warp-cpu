@@ -1,304 +1,304 @@
 # AGENTS.md
 
-> 本文件是给在本仓库中工作的 AI/自动化 agent 的导航文档。它汇总了仓库的整体架构、Cargo 工作区中每个 crate 的职责、`app/` 主二进制下各子模块的边界,以及在做改动前必须遵守的工程约定。
+> This document serves as a navigation guide for the AI and automated agents working within this repository. It summarizes the overall architecture of the repository, the responsibilities of each crate in the Cargo workspace, the boundaries of submodules under the main `app/` binary, and the engineering conventions that must be observed before making changes.
 >
-> 与 `WARP.md` 是配套关系:`WARP.md` 是工程师手册(命令、风格、流程),本文件是**代码地图**。先读 `WARP.md`,再用本文件定位到正确的 crate / 模块。
+> This document works in tandem with `WARP.md`: `WARP.md` is the developer's handbook (covering commands, coding style, and workflows), while this document is the **code map**. Read `WARP.md` first, then refer to this document to locate the correct crate or module.
 
 ---
 
-## 1. 仓库总览
+## 1. Repository Overview
 
-Warp 是一个以 Rust 为主的 **agentic 终端 / 开发环境**:在一个自研 UI 框架(WarpUI)上,集成了终端模拟、AI Agent、云同步(Drive)、代码评审、补全、Notebook、设置、IPC 等能力。
+Warp is a Rust-centric **agentic terminal and development environment**: it integrates terminal emulation, AI agents, cloud sync (Drive), code reviews, completions, Notebooks, settings, IPC, and more on top of a custom UI framework (WarpUI).
 
-顶层目录:
+Top-level directories:
 
-| 目录 | 作用 |
+| Directory | Purpose |
 |------|------|
-| `app/` | 主二进制 crate(`warp`),装配所有子系统、UI、数据库迁移、平台粘合层 |
-| `crates/` | 67 个工作区成员,按职责拆分的库 crate |
-| `command-signatures-v2/` | 独立子项目(在 nextest 运行时被 `--exclude`) |
-| `script/` | 跨平台 bootstrap、构建、presubmit 脚本 |
-| `resources/` | 字体、图标、shell 集成脚本、shaders 等运行时资源 |
-| `docker/` | 容器化构建相关 |
-| `specs/` | 产品/技术 spec 文档 |
-| `.agents/skills`, `.claude/skills` | agent 工作流的 skill 描述(创建 PR、修复错误、特性灰度等) |
-| `.warp/`, `.config/`, `.cargo/`, `.vscode/` | 各类工具配置 |
+| `app/` | Main binary crate (`warp`), assembling all subsystems, UI, database migrations, and platform glue layers |
+| `crates/` | 67 workspace members, library crates split by responsibility |
+| `command-signatures-v2/` | Independent subproject (excluded by `--exclude` when nextest runs) |
+| `script/` | Cross-platform bootstrap, build, and presubmit scripts |
+| `resources/` | Runtime resources such as fonts, icons, shell integration scripts, shaders, etc. |
+| `docker/` | Containerized build configuration |
+| `specs/` | Product and technical spec documents |
+| `.agents/skills`, `.claude/skills` | Skill descriptions for agent workflows (creating PRs, fixing errors, feature rollouts, etc.) |
+| `.warp/`, `.config/`, `.cargo/`, `.vscode/` | Various tool configurations |
 
-构建系统:Cargo workspace,`resolver = "2"`,`default-members` 故意收敛到经常需要编译/测试的子集(见 `Cargo.toml`)。`serve-wasm` 与 `integration` 默认不在 `default-members` 内。
+Build system: Cargo workspace, `resolver = "2"`. The `default-members` are intentionally restricted to the subset that requires frequent compilation/testing (see `Cargo.toml`). `serve-wasm` and `integration` are excluded from `default-members` by default.
 
-许可证拆分:
-- `crates/warpui` 与 `crates/warpui_core` → MIT
-- 其余 → AGPL-3.0-only
+License division:
+- `crates/warpui` and `crates/warpui_core` → MIT
+- Everything else → AGPL-3.0-only
 
 ---
 
-## 2. 顶层架构分层
+## 2. Top-level Architecture Layering
 
-从底向上大致是 4 层。在新增代码或定位 bug 时,先确定改动属于哪一层,**不要跨层倒挂依赖**。
+Roughly 4 layers from bottom to top. When adding new code or locating a bug, first determine which layer the change belongs to, and **never introduce reverse dependencies across layers**.
 
 ```
-app/  (主二进制:装配、入口、平台粘合、持久化迁移、UI 视图根)
+app/  (Main binary: assembly, entry points, platform glue, persistence migration, UI view root)
   ↑
-产品域 crate:ai / computer_use / vim / onboarding /
+Product domain crates: ai / computer_use / vim / onboarding /
               warp_completer / lsp / languages / code-review …
   ↑
-框架 crate:warpui / warpui_core / warpui_extras / editor /
+Framework crates: warpui / warpui_core / warpui_extras / editor /
             ui_components / sum_tree / syntax_tree
   ↑
-基础设施 crate:warp_core / warp_util / http_client /
+Infrastructure crates: warp_core / warp_util / http_client /
                 websocket / ipc / jsonrpc / persistence / graphql /
                 managed_secrets / virtual_fs / watcher / asset_cache …
 ```
 
-关键架构模式(详见 `WARP.md`):
+Key architectural patterns (see `WARP.md` for details):
 
-1. **Entity-Handle 系统**:`App` 全局拥有所有 view/model entity,View 之间通过 `ViewHandle<T>` 引用,而不是直接拥有。
-2. **Element / Action**:UI 由声明式 Element 树 + Action 事件系统组成(Flutter 风格)。
-3. **跨平台**:macOS / Windows / Linux 原生实现 + WASM 目标;平台代码用 `#[cfg(...)]` 隔离。
-4. **AI 集成**:Agent Mode 与上下文索引,代码集中在 `app/src/ai`(389 文件)与 `crates/ai`。
-5. **云同步**:`Drive` 让对象在多设备同步,见 `app/src/drive` 与 `crates/warp_files`。
-6. **Feature Flag**:运行时灰度优先于 `#[cfg]`,枚举定义在 `crates/warp_core/src/features.rs`。
+1. **Entity-Handle System**: `App` globally owns all view/model entities. Views reference each other via `ViewHandle<T>` rather than direct ownership.
+2. **Element / Action**: The UI consists of a declarative Element tree + Action event system (Flutter-style).
+3. **Cross-platform**: Native implementations for macOS / Windows / Linux + WASM targets; platform code is isolated with `#[cfg(...)]`.
+4. **AI Integration**: Agent Mode and context indexing, code is concentrated in `app/src/ai` (389 files) and `crates/ai`.
+5. **Cloud Sync**: `Drive` allows objects to sync across multiple devices, see `app/src/drive` and `crates/warp_files`.
+6. **Feature Flags**: Runtime rollouts are preferred over `#[cfg]`, enums are defined in `crates/warp_core/src/features.rs`.
 
 ---
 
-## 3. `crates/` 一览
+## 3. Overview of `crates/`
 
-下表按主题分组列出全部 67 个 crate。每行只写**一句话职责**;要看实现细节,直接打开对应 `crates/<name>/src/lib.rs`(很多 crate 在 `lib.rs` 顶部有 `//!` 模块文档)。
+The table below lists all 67 crates grouped by theme. Each row has a **one-sentence responsibility**; for implementation details, open the corresponding `crates/<name>/src/lib.rs` directly (many crates have `//!` module documentation at the top of `lib.rs`).
 
-### 3.1 UI 框架 / 视图层
+### 3.1 UI Framework / View Layer
 
-| Crate | 职责 |
+| Crate | Responsibility |
 |-------|------|
-| `warpui_core` | WarpUI 框架核心(MIT):`App` / `Entity` / `ViewHandle` / `AppContext` 等基础设施 |
-| `warpui` | WarpUI 上层组件、Element 树、布局、渲染管线(MIT) |
-| `warpui_extras` | WarpUI 的可选扩展件,默认不启用全部 features |
-| `ui_components` | 跨视图复用的高层组件库(按钮、输入、列表、模态等) |
-| `editor` (`warp_editor`) | 文本编辑器:缓冲区、选择、光标、键映射、撤销栈 |
-| `sum_tree` | 持久化平衡 B-树,编辑器 / Notebook / 大列表的核心数据结构 |
-| `syntax_tree` | Tree-sitter 封装与语法高亮支持 |
-| `markdown_parser` | Markdown 解析(用于 AI 消息、文档视图、Notebook 等) |
-| `vim` | Vim 模式键绑定与操作语义 |
-| `voice_input` | 语音输入支持 |
+| `warpui_core` | Core of the WarpUI framework (MIT): infrastructure like `App`, `Entity`, `ViewHandle`, and `AppContext` |
+| `warpui` | Upper-level WarpUI components, Element tree, layout, and rendering pipeline (MIT) |
+| `warpui_extras` | Optional extensions for WarpUI, not all features are enabled by default |
+| `ui_components` | High-level reusable component library across views (buttons, inputs, lists, modals, etc.) |
+| `editor` (`warp_editor`) | Text editor: buffers, selection, cursors, keymaps, undo stack |
+| `sum_tree` | Persistent balanced B-tree, core data structure for the editor / Notebook / large lists |
+| `syntax_tree` | Tree-sitter wrapper and syntax highlighting support |
+| `markdown_parser` | Markdown parsing (used for AI messages, doc views, Notebooks, etc.) |
+| `vim` | Vim mode keybindings and operational semantics |
+| `voice_input` | Voice input support |
 
-### 3.2 终端
+### 3.2 Terminal
 
-| Crate | 职责 |
+| Crate | Responsibility |
 |-------|------|
-| `warp_terminal` | 终端模拟核心:PTY 管理、ANSI/VT 解析、grid、滚动、shell 集成钩子 |
-| `input_classifier` | 终端输入意图分类(纯命令 / 自然语言 / AI Prompt) |
-| `natural_language_detection` | 自然语言识别(配合 `input_classifier`) |
+| `warp_terminal` | Core of terminal emulation: PTY management, ANSI/VT parsing, grid, scrolling, and shell integration hooks |
+| `input_classifier` | Terminal input intent classification (pure command / natural language / AI Prompt) |
+| `natural_language_detection` | Natural language recognition (in coordination with `input_classifier`) |
 
 ### 3.3 AI / Agent
 
-| Crate | 职责 |
+| Crate | Responsibility |
 |-------|------|
-| `ai` | AI 模型客户端、Prompt 编排、Agent 协议、工具调用框架 |
-| `computer_use` | "Computer Use" 工具能力(截屏、点击、键入等)的 Rust 端实现 |
-| `command-signatures-v2` | 命令签名 v2(给 AI 用的命令分类元数据);独立项目,不进入主工作区测试集 |
-| `onboarding` | 新用户引导流程数据/状态 |
+| `ai` | AI model client, Prompt orchestration, Agent protocol, and tool invocation framework |
+| `computer_use` | Rust-side implementation of "Computer Use" tool capabilities (screenshots, clicks, typing, etc.) |
+| `command-signatures-v2` | Command signatures v2 (metadata for AI command classification); independent project, excluded from workspace tests |
+| `onboarding` | Data and state for new user onboarding flows |
 
-### 3.4 网络 / 协议 / IPC
+### 3.4 Network / Protocols / IPC
 
-| Crate | 职责 |
+| Crate | Responsibility |
 |-------|------|
-| `http_client` | 工作区统一 HTTP 客户端封装 |
-| `http_server` | 内嵌 HTTP server(本地 RPC、登录回调等) |
-| `websocket` | 原生与 WASM 共用的 WebSocket 抽象,适配 `graphql_ws_client` |
-| `graphql` (`warp_graphql`) | GraphQL 客户端、查询/订阅生成,从 `graphql/api/schema.graphql` 出 |
-| `warp_graphql_schema` | GraphQL 服务端 schema 定义 / 共享类型 |
-| `warp_server_client` | 与 warp 服务端的高层 RPC 客户端 |
-| `ipc` | 通用类型化 IPC 请求/响应协议(进程间) |
-| `jsonrpc` | JSON-RPC 实现 |
-| `lsp` | Language Server Protocol 客户端实现 |
-| `remote_server` | 远端 sshd 模式下的服务端逻辑 |
-| `serve-wasm` | 把 WASM 构建产物 host 出来的辅助 server(默认不参与编译) |
-| `firebase` | Firebase 客户端工具(Crash/分析等渠道) |
+| `http_client` | Unified HTTP client wrapper in the workspace |
+| `http_server` | Embedded HTTP server (local RPC, login callbacks, etc.) |
+| `websocket` | Shared WebSocket abstraction for native and WASM, adapted to `graphql_ws_client` |
+| `graphql` (`warp_graphql`) | GraphQL client, query/subscription generation, built from `graphql/api/schema.graphql` |
+| `warp_graphql_schema` | GraphQL server schema definitions / shared types |
+| `warp_server_client` | High-level RPC client interacting with the warp server |
+| `ipc` | Generic typed IPC request/response protocol (between processes) |
+| `jsonrpc` | JSON-RPC implementation |
+| `lsp` | Language Server Protocol client implementation |
+| `remote_server` | Server-side logic under remote sshd mode |
+| `serve-wasm` | Auxiliary server to host WASM build artifacts (excluded from compilation by default) |
+| `firebase` | Firebase client tools (crash reporting/analytics channels, etc.) |
 
-### 3.5 持久化 / 文件 / 资源
+### 3.5 Persistence / Files / Resources
 
-| Crate | 职责 |
+| Crate | Responsibility |
 |-------|------|
-| `persistence` | Diesel + SQLite 持久层基础;**migrations 在 `app/migrations/`,schema 在 `app/src/persistence/schema.rs`** |
-| `warp_files` | Drive 文件、Workflow、Notebook 等可同步文件对象 |
-| `virtual_fs` | 抽象文件系统(测试用 mock 与生产用真实 FS 同接口) |
-| `repo_metadata` | 仓库元数据:文件树构建、`.gitignore` 处理、文件系统监听 |
-| `watcher` | 文件系统监视器(对 `notify` 的封装) |
-| `asset_cache` | 资源磁盘/内存缓存 |
-| `asset_macro` | `bundled!` / `theme!` 等资源引用宏 |
-| `managed_secrets` / `managed_secrets_wasm` | Keychain / DPAPI / Linux Keyring 抽象 + WASM 代理 |
+| `persistence` | Diesel + SQLite persistence layer foundation; **migrations are in `app/migrations/`, schema in `app/src/persistence/schema.rs`** |
+| `warp_files` | Synchronizable file objects like Drive files, Workflows, and Notebooks |
+| `virtual_fs` | Abstract file system (mock FS for testing and real FS for production share the same interface) |
+| `repo_metadata` | Repository metadata: file tree construction, `.gitignore` handling, and file system watching |
+| `watcher` | File system watcher (wrapper around `notify`) |
+| `asset_cache` | Disk/memory cache for resources |
+| `asset_macro` | Resource referencing macros such as `bundled!` / `theme!` |
+| `managed_secrets` / `managed_secrets_wasm` | Keychain / DPAPI / Linux Keyring abstraction + WASM proxy |
 
-### 3.6 配置 / 设置
+### 3.6 Configuration / Settings
 
-| Crate | 职责 |
+| Crate | Responsibility |
 |-------|------|
-| `settings` | 设置存储与变更分发 |
-| `settings_value` | `SettingsValue` trait:控制 TOML 序列化语义 |
-| `settings_value_derive` | `#[derive(SettingsValue)]` 过程宏(枚举变体转 snake_case 等) |
-| `warp_features` | Feature flag 高层 API(消费者侧) |
-| `channel_versions` | 发布通道(stable/preview/dogfood)与版本对比 |
+| `settings` | Settings storage and change distribution |
+| `settings_value` | `SettingsValue` trait: controls TOML serialization semantics |
+| `settings_value_derive` | `#[derive(SettingsValue)]` procedural macro (converts enum variants to snake_case, etc.) |
+| `warp_features` | High-level Feature Flag API (consumer side) |
+| `channel_versions` | Release channels (stable/preview/dogfood) and version comparison |
 
-### 3.7 命令 / 补全 / 语言
+### 3.7 Commands / Completions / Languages
 
-| Crate | 职责 |
+| Crate | Responsibility |
 |-------|------|
-| `command` | 跨平台进程派生的安全封装,**特别处理 Windows 的 `no_window` 标志**;新派生子进程一律走这里 |
-| `warp_completer` | 补全引擎(支持 `--features v2`) |
-| `languages` | 语言/扩展名/Tree-sitter grammar 注册 |
-| `warp_ripgrep` | 给 `warp_cli` 用的 ripgrep 薄封装 |
-| `warp_cli` | 二进制内的 CLI 子命令解析(`warp <subcmd>`) |
-| `fuzzy_match` | 模糊匹配 + glob 风格通配,用于路径搜索与命令面板 |
+| `command` | Safe process spawning wrapper across platforms, **specifically handles Windows `no_window` flags**; all new child processes must use this |
+| `warp_completer` | Completion engine (supports `--features v2`) |
+| `languages` | Registration of languages, extensions, and Tree-sitter grammars |
+| `warp_ripgrep` | Thin wrapper around ripgrep used by `warp_cli` |
+| `warp_cli` | CLI subcommand parser within the binary (`warp <subcmd>`) |
+| `fuzzy_match` | Fuzzy matching + glob-style wildcard matching, used for path search and command palettes |
 
-### 3.8 平台 / 系统服务
+### 3.8 Platform / System Services
 
-| Crate | 职责 |
+| Crate | Responsibility |
 |-------|------|
-| `app-installation-detection` | 检测系统中已安装的 app(用于 launcher 联动) |
-| `prevent_sleep` | 抑制休眠(长任务/AI Agent 期间) |
-| `isolation_platform` | 在 Docker / GitHub Actions 等沙箱中运行的兼容层 |
-| `node_runtime` | 自动安装/管理 Node.js 与 npm(macOS/Linux/Windows × 多架构) |
-| `warp_js` | 在 Rust 侧操作 JavaScript 值/函数的助手抽象 |
+| `app-installation-detection` | Detects installed applications in the system (for launcher integration) |
+| `prevent_sleep` | Inhibits sleep (during long-running tasks/AI Agent runs) |
+| `isolation_platform` | Compatibility layer for running in sandboxes like Docker / GitHub Actions |
+| `node_runtime` | Automatically installs/manages Node.js and npm (macOS/Linux/Windows × multi-arch) |
+| `warp_js` | Helper abstraction for manipulating JavaScript values/functions on the Rust side |
 
-### 3.9 通用工具 / 通信
+### 3.9 Common Utilities / Communication
 
-| Crate | 职责 |
+| Crate | Responsibility |
 |-------|------|
-| `warp_core` | 工作区内最底层的"core":平台抽象、`features.rs` 中 `FeatureFlag` 枚举与 `DOGFOOD/PREVIEW/RELEASE_FLAGS` |
-| `warp_util` | 跨多个 crate 复用的通用工具函数 |
-| `warp_logging` | 日志配置统一入口 |
-| `simple_logger` | 给 `remote_server` 等 stderr-only 进程用的简易异步文件日志 |
-| `warp_web_event_bus` | Web 端事件总线(给嵌入的 web view) |
-| `field_mask` | gRPC/Proto 风格 FieldMask 工具 |
-| `string-offset` | 偏移量基础类型(byte/char/utf16) |
-| `handlebars` | Handlebars 模板引擎封装 |
-| `integration` | 集成测试框架,只用于测试 |
+| `warp_core` | The lowest "core" layer in the workspace: platform abstractions, the `FeatureFlag` enum in `features.rs` and `DOGFOOD/PREVIEW/RELEASE_FLAGS` |
+| `warp_util` | General utility functions shared across multiple crates |
+| `warp_logging` | Unified entry point for logging configuration |
+| `simple_logger` | Simple asynchronous file logger for stderr-only processes like `remote_server` |
+| `warp_web_event_bus` | Web-side event bus (for embedded web views) |
+| `field_mask` | gRPC/Proto style FieldMask utility |
+| `string-offset` | Offset base types (byte/char/utf16) |
+| `handlebars` | Handlebars template engine wrapper |
+| `integration` | Integration testing framework, used only for testing |
 
-> 命名小坑:`crates/editor` 的 package 名是 `warp_editor`;`crates/graphql` 是 `warp_graphql`;`crates/isolation_platform` 是 `warp_isolation_platform`;`crates/managed_secrets` 是 `warp_managed_secrets`;`crates/virtual_fs` 是 `virtual-fs`(短横线);`crates/string-offset` 是 `string-offset`(短横线)。
+> **Naming quirks**: the package name for `crates/editor` is `warp_editor`; `crates/graphql` is `warp_graphql`; `crates/isolation_platform` is `warp_isolation_platform`; `crates/managed_secrets` is `warp_managed_secrets`; `crates/virtual_fs` is `virtual-fs` (hyphen); `crates/string-offset` is `string-offset` (hyphen).
 
 ---
 
-## 4. `app/` 子模块导航
+## 4. `app/` Submodule Navigation
 
-`app/src/` 下平铺了 60+ 个产品域目录,每个目录大致对应一条产品功能线。以下按主题分组,括号内是大致 `.rs` 文件数,用于估计模块体量:
+Under `app/src/`, there are 60+ flat product domain directories. Each directory corresponds to a product feature line. Below is a grouped summary by theme, with the approximate number of `.rs` files in parentheses to estimate complexity:
 
-### 4.1 启动 / 装配 / 全局
-- `bin/` (7) — 多个二进制入口(主程序、附带工具)。
-- `lib.rs` / `app_state.rs` / `app_state_tests.rs` — 应用状态根。
+### 4.1 Startup / Assembly / Global
+- `bin/` (7) — Multiple binary entry points (main program, accompanying tools).
+- `lib.rs` / `app_state.rs` / `app_state_tests.rs` — Application state root.
 - `app_menus.rs`, `app_services/`, `app_id_test.rs`
 - `appearance.rs`, `gpu_state.rs`, `font_fallback.rs`, `global_resource_handles.rs`
 - `dynamic_libraries.rs`, `alloc.rs`, `tracing.rs`, `profiling.rs`
 - `crash_recovery.rs`, `crash_reporting/` (4)
-- `features.rs` — `app/` 内对 `warp_core::FeatureFlag` 的消费;新增 flag 时通常需要在两处都接好。
+- `features.rs` — Consumption of `warp_core::FeatureFlag` within `app/`; adding a flag typically requires wiring it in both places.
 - `channel.rs`, `download_method.rs`, `autoupdate/` (8)
 
-### 4.2 终端
-- `terminal/` (427) — 主体:shell 进程、PTY、grid、blocks、shell 集成、命令执行、I/O 流水线。
-- `default_terminal/` (2) — 默认终端启动逻辑。
-- `shell_indicator.rs`, `prefix.rs` / `prefix_test.rs`(命令前缀解析),`vim_registers.rs`
+### 4.2 Terminal
+- `terminal/` (427) — Core: shell processes, PTY, grid, blocks, shell integration, command execution, and I/O pipeline.
+- `default_terminal/` (2) — Default terminal startup logic.
+- `shell_indicator.rs`, `prefix.rs` / `prefix_test.rs` (command prefix parsing), `vim_registers.rs`
 
 ### 4.3 AI / Agent
-- `ai/` (389) — 包含 Agent UI、对话模型、Agent 管理、工具/MCP、Cloud Agent、Plan/Diff 视图、artifacts、blocklist、execution profiles 等。**这是仓库最大的子树**,改动前先在该目录内 grep 具体子主题(`agent_*`, `conversation_*`, `cloud_agent_*`, `mcp`, `tool_*`)。
-- `ai_assistant/` (9) — 旧版 AI 辅助入口/适配。
-- `chip_configurator/`, `context_chips/` (22) — Agent 上下文 chip 选择/构造。
+- `ai/` (389) — Contains Agent UI, conversation models, Agent management, tools/MCP, Cloud Agent, Plan/Diff views, artifacts, blocklists, execution profiles, etc. **This is the largest subtree in the repository**. Before making changes, grep for specific subthemes (`agent_*`, `conversation_*`, `cloud_agent_*`, `mcp`, `tool_*`) within this directory.
+- `ai_assistant/` (9) — Legacy AI assistant entry point/adaptation.
+- `chip_configurator/`, `context_chips/` (22) — Selection and construction of Agent context chips.
 - `coding_entrypoints/` (5), `coding_panel_enablement_state.rs`
 - `prompt/` (2), `tips/` (3), `voice/` (2), `completer/` (3)
 
-### 4.4 编辑器 / 代码 / Review
-- `editor/` (38) — 主编辑器集成。
-- `code/` (52) — 代码视图、diff、navigation。
-- `code_review/` (36) — Code Review 流。
+### 4.4 Editor / Code / Review
+- `editor/` (38) — Main editor integration.
+- `code/` (52) — Code views, diffs, and navigation.
+- `code_review/` (36) — Code review workflow.
 - `notebooks/` (30), `workflows/` (22)
 
-### 4.5 搜索
-- `search/` (172) — 多目标搜索(文件、命令、Agent 历史等)。
+### 4.5 Search
+- `search/` (172) — Multi-target search (files, commands, Agent history, etc.).
 - `search_bar.rs`
 
-### 4.6 服务端通信 / Drive / 同步
-- `server/` (55) — 与 warp 后端的 HTTP/WS 交互(对应本地开发模式 `with_local_server`)。
-- `drive/` (45) — 云端对象同步入口。
-- `cloud_object/` (12) — 云对象抽象层(workflow、notebook 等)。
-- `remote_server/` (5) — 客户端侧连接 remote 模式 sshd 的 glue。
+### 4.6 Server Communication / Drive / Sync
+- `server/` (55) — HTTP/WS interaction with the warp backend (corresponds to local development mode `with_local_server`).
+- `drive/` (45) — Entry point for cloud object sync.
+- `cloud_object/` (12) — Cloud object abstraction layer (workflows, notebooks, etc.).
+- `remote_server/` (5) — Client-side glue for connecting to the remote mode sshd.
 
-### 4.7 设置 / 用户配置 / 主题 / Onboarding
+### 4.7 Settings / User Configuration / Themes / Onboarding
 - `settings/` (46), `settings_view/` (63)
 - `user_config/` (6), `themes/` (11), `appearance.rs`
 - `experiments/` (7), `tab_configs/` (15), `launch_configs/` (4)
 - `tips/`, `banner/` (3), `quit_warning/` (1), `wasm_nux_dialog.rs`, `referral_theme_status.rs`
 
-### 4.8 认证 / 计费 / 使用量
-- `auth/` (22) — 登录、token、SSO。
+### 4.8 Auth / Billing / Usage
+- `auth/` (22) — Login, tokens, and SSO.
 - `billing/` (3), `pricing/` (1), `usage/` (1), `reward_view.rs`
 
-### 4.9 持久化
-- `persistence/` (9) — Diesel migrations 装配、`schema.rs`(由 Diesel 生成)、迁移运行器。
-- 迁移文件在仓库 `migrations/` 顶级目录(由 Diesel CLI 管理)。
+### 4.9 Persistence
+- `persistence/` (9) — Diesel migrations assembly, `schema.rs` (generated by Diesel), and migration runner.
+- Migration files are located in the top-level `migrations/` directory of the repository (managed by Diesel CLI).
 
-### 4.10 平台 / 系统集成
+### 4.10 Platform / System Integration
 - `platform/` (2), `system/` (3) / `system.rs`
 - `login_item/` (3), `antivirus/` (3), `network.rs`
 - `external_secrets/` (1), `env_vars/` (14)
-- `keyboard.rs` / `keyboard_test.rs`, `safe_triangle.rs` / `safe_triangle_tests.rs`(菜单悬停安全三角)
+- `keyboard.rs` / `keyboard_test.rs`, `safe_triangle.rs` / `safe_triangle_tests.rs` (safe hover triangle for menus)
 
-### 4.11 视图根 / 面板 / 通用 UI
+### 4.11 View Root / Panels / Common UI
 - `root_view.rs` / `root_view_tests.rs`
-- `pane_group/` (35) — 分屏分块布局。
+- `pane_group/` (35) — Split layout and pane management.
 - `tab.rs`, `command_palette.rs`, `modal.rs`, `menu.rs` / `menu_test.rs`
 - `palette.rs`, `notification.rs`, `resource_center/` (10)
 - `view_components/` (20), `ui_components/` (14)
-- `workspace/` (54), `workspaces/` (10), `voltron.rs`(多窗口/多 workspace 协调)
+- `workspace/` (54), `workspaces/` (10), `voltron.rs` (coordination of multiple windows/workspaces)
 - `session_management.rs`, `undo_close/` (3), `word_block_editor.rs`
 - `suggestions/` (2), `input_suggestions.rs` / `input_suggestions_test.rs`
-- `plugin/` (21) — 插件系统接入。
-- `uri/` (7) — `warp://` URL 处理。
+- `plugin/` (21) — Plugin system integration.
+- `uri/` (7) — `warp://` URL handling.
 - `debug_dump.rs`, `debounce.rs`, `interval_timer.rs`, `throttle.rs`
 - `linear.rs`, `resource_limits.rs`, `warp_managed_paths_watcher.rs`
 - `preview_config_migration.rs` / `preview_config_migration_tests.rs`
 - `window_settings.rs`, `projects.rs`
 
-### 4.12 测试基建
-- `integration_testing/` (79) — 端到端集成测试支撑。
-- `test_util/` (6) — 单元测试公共 util。
+### 4.12 Test Infrastructure
+- `integration_testing/` (79) — End-to-end integration test support.
+- `test_util/` (6) — Public utilities for unit testing.
 
 ---
 
-## 5. 工程纪律(给 Agent 的强约束)
+## 5. Engineering Discipline (Hard Constraints for Agents)
 
-> 这些来自 `WARP.md` 与项目自定义规则,违反会导致 PR 被打回或引入运行期 bug。
+> These are derived from `WARP.md` and custom project rules. Violating them will lead to PR rejection or runtime bugs.
 
-### 5.1 必读约定
-- **注释/回复一律使用简体中文**(用户规则)。
-- 在 git 索引内的搜索/grep 使用 `fff` 工具或 `rg -n "<关键词>" <路径>`;`read_file` 仅用于图片/二进制。
-- 提 PR / 推新 commit 之前,**必须**通过:`cargo fmt` + `cargo clippy --workspace --all-targets --all-features --tests -- -D warnings` + `./script/presubmit`。
-- 改动需精准:**每一行修改都能溯源到用户请求**,不要顺手"改进"无关代码、注释、格式。
-- 简洁优先:不要为单点使用引入抽象、配置、错误处理、多余特性。
-- 多解释方案、暴露不确定性,而不是默默替用户做选择。
+### 5.1 Critical Conventions
+- **Comments and replies must all be in English** (User Rule).
+- For searching/grepping within git-indexed files, use the `fff` tool or `rg -n "<keyword>" <path>`; `read_file` is reserved for image/binary files.
+- Before submitting a PR or pushing a new commit, you **MUST** run: `cargo fmt` + `cargo clippy --workspace --all-targets --all-features --tests -- -D warnings` + `./script/presubmit`.
+- Changes must be precise: **every line of modification must be traceable to a user request**. Do not modify unrelated code, comments, or formatting on the side.
+- Simplicity first: do not introduce abstractions, configurations, error handling, or redundant features for single-use scenarios.
+- Explain options and expose uncertainties rather than silently making decisions on behalf of the user.
 
-### 5.2 Rust 风格(摘自 `WARP.md`)
-- 闭包参数不要写多余类型注解。
-- 顶部统一 `use`,不要写一长串路径限定;`#[cfg]` 分支内例外。
-- 上下文参数命名为 `ctx` 且放在最后;若同时有闭包参数,闭包放最后。
-- 未使用参数**直接删除**而不是加 `_` 前缀,同步更新调用点。
-- `println!` / `format!` 等宏使用内联格式参数(`"{x}"` 而不是 `"{}", x`)以满足 `uninlined_format_args`。
-- `match` 语句**禁止使用 `_` 通配**(除非确实需要),保持穷尽匹配。
-- 不要因为不相关的修改去删/改既有注释。
+### 5.2 Rust Coding Style (from `WARP.md`)
+- Do not write redundant type annotations for closure parameters.
+- Keep `use` statements grouped at the top of the file; do not write long path qualifiers except inside `#[cfg]` branches.
+- Name the context parameter `ctx` and place it last; if there are also closure parameters, place the closure last.
+- Remove unused parameters **completely** instead of prefixing them with `_`. Update all call sites synchronously.
+- Use inline format arguments in macros like `println!` / `format!` (e.g., `"{x}"` instead of `"{}" , x`) to satisfy the `uninlined_format_args` lint.
+- **Wildcard `_` matches are strictly prohibited** in `match` statements (unless absolutely necessary) to ensure exhaustive matching.
+- Do not delete or modify existing comments unless the logic they describe has changed.
 
-### 5.3 终端模型锁(高优先级!)
-- 调用 `TerminalModel::lock()` 极易死锁(macOS 上表现为 UI 卡死/沙滩球)。
-- 新增 `model.lock()` 前必须确认调用栈中没有上层已经持锁;尽量把已锁定的引用沿调用栈往下传,而不是再次加锁。
-- 持锁范围最小化,持锁时不要调用可能再次加锁的函数。
+### 5.3 Terminal Model Lock (High Priority!)
+- Calling `TerminalModel::lock()` can easily cause deadlocks (manifesting as frozen UI or beachballing).
+- Before calling `model.lock()`, verify that no parent caller in the current call stack already holds the lock. Prefer passing already-locked references down the call stack instead of locking again.
+- Minimize the scope of the lock, and do not call functions that might attempt to lock the model while holding a lock.
 
-### 5.4 Feature Flag
-- 新增:在 `crates/warp_core/src/features.rs` 的 `FeatureFlag` 枚举里加 variant;按需把它加入 `DOGFOOD_FLAGS` / `PREVIEW_FLAGS` / `RELEASE_FLAGS`。
-- 使用:**优先**用运行时 `FeatureFlag::Xxx.is_enabled()`,而不是 `#[cfg(...)]`;只有当无 `cfg` 就无法编译(平台/可选依赖)时才用 `cfg`。
-- 包裹整段产品功能,而非每个调用点都加;上线稳定后**清理 flag 与死分支**。
-- UI 入口要与代码路径用同一个 flag。
+### 5.4 Feature Flags
+- Adding flags: add a variant in the `FeatureFlag` enum in `crates/warp_core/src/features.rs`, and add it to `DOGFOOD_FLAGS` / `PREVIEW_FLAGS` / `RELEASE_FLAGS` as needed.
+- Usage: **prefer** runtime checks like `FeatureFlag::Xxx.is_enabled()` over `#[cfg(...)]`; use `#[cfg]` only when compilation is impossible without it (e.g., platform-specific dependencies).
+- Wrap entire feature areas instead of checking flags at every single call site. **Clean up flags and dead branches** once the feature is stable.
+- The UI entry point and code paths must be gated by the same flag.
 
-### 5.5 数据库
-- ORM:Diesel + SQLite。
-- 新增/改 schema 必须走 migration:在 `migrations/` 加新目录(`up.sql` / `down.sql`),不要手改 `app/src/persistence/schema.rs`(由 `diesel print-schema` 生成)。
+### 5.5 Database
+- ORM: Diesel + SQLite.
+- Schema modifications must run via migrations: add a new directory under `migrations/` containing `up.sql` / `down.sql`. Do not manually modify `app/src/persistence/schema.rs` (which is generated by `diesel print-schema`).
 
-### 5.6 测试
-- 用 `cargo nextest run --no-fail-fast --workspace --exclude command-signatures-v2`。
-- 单元测试放到 `${文件名}_tests.rs` 或 `mod_test.rs`,在原文件末尾用:
+### 5.6 Testing
+- Run tests with `cargo nextest run --no-fail-fast --workspace --exclude command-signatures-v2`.
+- Place unit tests in `${filename}_tests.rs` or `mod_test.rs`, and include them at the end of the original file with:
 
   ```rust
   #[cfg(test)]
@@ -306,51 +306,51 @@ app/  (主二进制:装配、入口、平台粘合、持久化迁移、UI 视图
   mod tests;
   ```
 
-- 集成测试用 `crates/integration` 的框架,样例在 `app/src/integration_testing/`。
+- Integration tests use the `crates/integration` framework; examples are in `app/src/integration_testing/`.
 
-### 5.7 跨进程命令
-- 不要直接 `std::process::Command::new(...)`(尤其在 Windows 上会弹窗),统一走 `crates/command`。
+### 5.7 Cross-process Spawning
+- Never spawn child processes directly using `std::process::Command::new(...)` (which can pop up terminal windows on Windows). Use the wrapper in `crates/command` instead.
 
-### 5.8 子代理 / 多代理
-- 大任务拆分为**写入域不重叠**的子任务并行下发;信息收集类任务可以并行。
-- 简单任务直接做,不要过度拆分。
+### 5.8 Sub-agents / Multi-agents
+- Split large tasks into parallel sub-agents with **non-overlapping write domains**. Information gathering tasks can also run in parallel.
+- Execute simple tasks directly without over-splitting.
 
 ---
 
-## 6. 常用入口速查
+## 6. Quick Reference for Common Entry Points
 
-| 想做的事 | 起点 |
+| Intended Action | Starting Point |
 |---------|------|
-| 改终端 grid / shell 集成 | `crates/warp_terminal/src/`,联动 `app/src/terminal/` |
-| 改 Agent UI / 对话 | `app/src/ai/` 内按 `agent_*` / `conversation_*` 分主题 grep |
-| 改命令补全 | `crates/warp_completer/`(注意 `--features v2`) |
-| 改 AI 模型 / 工具调用协议 | `crates/ai/` |
-| 加新设置项 | `crates/settings_value*`、`crates/settings`,UI 在 `app/src/settings_view/` |
-| 加 Feature Flag | `crates/warp_core/src/features.rs` + 使用点 |
-| 改云端同步对象 | `crates/warp_files` + `app/src/drive/` + `app/src/cloud_object/` |
-| 加 GraphQL 操作 | 写到 `crates/graphql/`,schema 在 `graphql/api/schema.graphql` |
-| 改持久化结构 | `migrations/` 加迁移 + `crates/persistence` |
-| 加新二进制工具 | `app/src/bin/` |
-| 平台特定代码 | 用 `#[cfg(target_os = "...")]`,UI 平台胶水在 `app/src/platform/` |
-| Vim 模式 | `crates/vim` + `app/src/vim_registers.rs` |
-| Notebook / Workflow | `app/src/notebooks/`、`app/src/workflows/`、`crates/warp_files` |
-| 跨平台进程派生 | `crates/command` |
-| 文件搜索 / 监听 | `crates/repo_metadata`、`crates/watcher`、`crates/warp_ripgrep` |
+| Modify terminal grid / shell integration | `crates/warp_terminal/src/`, coordinated with `app/src/terminal/` |
+| Modify Agent UI / Conversations | Grep by theme (`agent_*` / `conversation_*`) under `app/src/ai/` |
+| Modify command completion | `crates/warp_completer/` (note `--features v2`) |
+| Modify AI model / Tool invocation protocol | `crates/ai/` |
+| Add new settings | `crates/settings_value*`, `crates/settings`, UI in `app/src/settings_view/` |
+| Add Feature Flags | `crates/warp_core/src/features.rs` + usage sites |
+| Modify cloud sync objects | `crates/warp_files` + `app/src/drive/` + `app/src/cloud_object/` |
+| Add GraphQL operations | Add to `crates/graphql/`, schema in `graphql/api/schema.graphql` |
+| Modify persistence structure | Add migration to `migrations/` + `crates/persistence` |
+| Add a new binary tool | `app/src/bin/` |
+| Platform-specific code | Use `#[cfg(target_os = "...")]`, UI platform glue is in `app/src/platform/` |
+| Vim mode | `crates/vim` + `app/src/vim_registers.rs` |
+| Notebook / Workflow | `app/src/notebooks/`, `app/src/workflows/`, `crates/warp_files` |
+| Cross-platform process spawning | `crates/command` |
+| File search / Watching | `crates/repo_metadata`, `crates/watcher`, `crates/warp_ripgrep` |
 
 ---
 
-## 7. 修改前的检查清单
+## 7. Checklist Before Modification
 
-在动键盘改代码前,自问一次:
+Before picking up the keyboard to modify code, ask yourself:
 
-1. 这件事属于哪一层 / 哪个 crate / 哪个 `app/src/<子模块>`?改动是否会跨越层界?
-2. 是否需要新增依赖?如已存在的 workspace 依赖能复用,优先复用 `Cargo.toml` `[workspace.dependencies]`。
-3. 这是产品功能吗?是否需要 Feature Flag 包起来?
-4. 涉及终端模型?当前调用栈是否已经持有 `TerminalModel` 锁?
-5. 涉及子进程?是否走了 `crates/command`?
-6. 涉及持久化?是否需要 migration?
-7. 已经写了对应的 `${file}_tests.rs`?
-8. `cargo fmt` / `cargo clippy -D warnings` / 相关 `cargo nextest` 是否绿?
-9. 改动的每一行能否一一对应到用户请求?顺手做的"小重构"是否应该回滚?
+1. Which layer / crate / `app/src/<submodule>` does this belong to? Will this change cross layer boundaries?
+2. Is a new dependency required? If an existing workspace dependency can be reused, prioritize reusing it from the `[workspace.dependencies]` in `Cargo.toml`.
+3. Is this a product feature? Does it need to be gated behind a Feature Flag?
+4. Does this involve the terminal model? Does the current call stack already hold the `TerminalModel` lock?
+5. Does this involve a child process? Does it use `crates/command`?
+6. Does this involve persistence? Is a migration needed?
+7. Have you written corresponding tests in `${file}_tests.rs`?
+8. Are `cargo fmt` / `cargo clippy -D warnings` / relevant `cargo nextest` runs passing cleanly?
+9. Can every single line of modification be mapped back to a user request? Should "small refactorings" done on the side be rolled back?
 
-把上面 9 条都过一遍,再交付。
+Double check all 9 items before delivering.

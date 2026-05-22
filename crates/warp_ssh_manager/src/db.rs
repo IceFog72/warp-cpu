@@ -1,15 +1,19 @@
-//! 全进程共享一个 `Mutex<SqliteConnection>` 给 SSH 管理器用。
+//! One process-wide `Mutex<SqliteConnection>` shared by the SSH manager.
 //!
-//! 现状: openWarp 的主写入连接在专门的写线程里(see `app/src/persistence/sqlite.rs`)
-//! 通过 `ModelEvent` channel 异步处理。给 SSH 管理器接入那个事件总线要加 6+ enum
-//! 变体 + 跨 crate 的类型暴露,代价过高。
+//! Background: Warp's primary write connection runs on a dedicated write thread
+//! (see `app/src/persistence/sqlite.rs`) and handles writes via a `ModelEvent`
+//! channel asynchronously.  Wiring the SSH manager into that event bus would
+//! require 6+ new enum variants and cross-crate type exposure — too costly.
 //!
-//! 替代方案:**SQLite WAL 模式天然支持多写连接**(写互斥但带 busy_timeout 重试),
-//! 这里再开一个独立写连接,行为完全本地化在本 crate 里。SSH 管理器的写操作是
-//! 用户驱动(创建/删除节点),频率极低,与主写线程的冲突可忽略。
+//! Alternative: **SQLite WAL mode natively supports multiple write connections**
+//! (writes are serialised, with a `busy_timeout` retry).  We open a separate
+//! independent write connection whose behaviour is entirely local to this crate.
+//! SSH-manager writes are user-driven (create/delete node) and extremely
+//! infrequent, so contention with the primary write thread is negligible.
 //!
-//! 路径由调用方在初始化时传入(`set_database_path`),避免本 crate 直接依赖 app
-//! 层的 `database_file_path()`。未传路径时,`with_conn` 返回 `Err(NotInitialized)`。
+//! The path is supplied by the caller at init time via `set_database_path`,
+//! keeping this crate free of any dependency on `app`'s `database_file_path()`.
+//! If the path has not been set, `with_conn` returns `Err(NotInitialized)`.
 
 use anyhow::{Result, anyhow};
 use diesel::connection::SimpleConnection;
@@ -21,8 +25,8 @@ use std::sync::{Mutex, OnceLock};
 static DB_PATH: OnceLock<PathBuf> = OnceLock::new();
 static CONN: OnceLock<Mutex<SqliteConnection>> = OnceLock::new();
 
-/// 由 app 启动时调用一次,传入 sqlite db 文件路径。重复调用会被忽略
-/// (OnceLock 语义)。
+/// Called once at app startup with the path to the SQLite DB file.
+/// Repeated calls are silently ignored (OnceLock semantics).
 pub fn set_database_path(path: PathBuf) {
     let _ = DB_PATH.set(path);
 }
@@ -41,7 +45,8 @@ fn open() -> Result<SqliteConnection> {
     Ok(conn)
 }
 
-/// 锁内执行闭包。首次调用时 lazy 打开连接;后续调用复用。
+/// Executes the closure under the connection lock.
+/// On the first call the connection is opened lazily; subsequent calls reuse it.
 pub fn with_conn<R>(f: impl FnOnce(&mut SqliteConnection) -> Result<R>) -> Result<R> {
     let mtx = CONN.get_or_init(|| Mutex::new(open().expect("warp_ssh_manager db open")));
     let mut guard = mtx
@@ -50,9 +55,28 @@ pub fn with_conn<R>(f: impl FnOnce(&mut SqliteConnection) -> Result<R>) -> Resul
     f(&mut *guard)
 }
 
-/// 测试用:直接注入一个内存连接,绕过 OnceLock。**不可重复**(OnceLock 一旦
-/// set 就不能再设)— 测试间共享内存 DB 是有意为之,各测试自己 cleanup 即可。
+/// Injects a pre-built connection for use in tests (bypasses the `OnceLock`).
+/// **Not repeatable** — once set the `OnceLock` cannot be overwritten.
+/// Tests intentionally share the same in-memory DB; each test is responsible
+/// for its own cleanup.
 #[cfg(test)]
 pub(crate) fn install_for_test(conn: SqliteConnection) {
     let _ = CONN.set(Mutex::new(conn));
+}
+
+/// Initialises an in-memory SQLite database for tests that instantiate views
+/// which use the SSH manager (e.g. `SshManagerPanel`).  Safe to call multiple
+/// times — only the first call takes effect (OnceLock semantics).
+///
+/// Intended for test fixtures only; no-op if the connection is already set.
+pub fn init_in_memory_for_test() {
+    if CONN.get().is_some() {
+        return;
+    }
+    match SqliteConnection::establish(":memory:") {
+        Ok(conn) => {
+            let _ = CONN.set(Mutex::new(conn));
+        }
+        Err(e) => log::error!("warp_ssh_manager: failed to open in-memory db for test: {e:#}"),
+    }
 }

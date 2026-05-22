@@ -3,6 +3,7 @@ use crate::ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::facts::manager::AIFactManager;
+use crate::ai::agent_providers::AgentProviderSecrets;
 use crate::ai::llms::LLMPreferences;
 use crate::ai::outline::RepoOutlines;
 use crate::ai::persisted_workspace::PersistedWorkspace;
@@ -85,6 +86,17 @@ use warpui::AddSingletonModel;
 use warpui::{platform::WindowStyle, App, ViewHandle};
 
 fn initialize_app(app: &mut App) {
+    // Initialise the SSH-manager in-memory DB before any view is created;
+    // SshManagerPanel::new calls with_conn on construction and expects the
+    // schema (ssh_nodes table) to already exist.
+    warp_ssh_manager::db::init_in_memory_for_test();
+    warp_ssh_manager::db::with_conn(|conn| {
+        use diesel_migrations::MigrationHarness;
+        conn.run_pending_migrations(persistence::MIGRATIONS)
+            .map(|_| ())
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    })
+    .expect("SSH manager in-memory DB migration failed");
     initialize_settings_for_tests(app);
 
     // Add the necessary singleton models to the App
@@ -138,7 +150,9 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(|_| ActiveAgentViewsModel::new());
     app.add_singleton_model(AgentNotificationsModel::new);
     app.add_singleton_model(AgentConversationsModel::new);
+    app.add_singleton_model(|_| crate::ssh_manager::SshTreeChangedNotifier::new());
     app.add_singleton_model(SessionPermissionsManager::new);
+    app.add_singleton_model(AgentProviderSecrets::new);
     app.add_singleton_model(LLMPreferences::new);
     app.add_singleton_model(|_| SettingsPaneManager::new());
     app.add_singleton_model(|_| AIFactManager::new());
@@ -160,7 +174,7 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(voice_input::VoiceInput::new);
     app.add_singleton_model(BlocklistAIPermissions::new);
     app.add_singleton_model(|_| GPUState::new());
-    app.add_singleton_model(|_| RestoredAgentConversations::new(vec![]));
+    app.add_singleton_model(|_| RestoredAgentConversations::default());
     app.add_singleton_model(OneTimeModalModel::new);
     // Register GlobalResourceHandlesProvider before ServerExperiments which depends on it
     let global_resource_handles = GlobalResourceHandles::mock(app);
@@ -287,7 +301,7 @@ fn open_worktree_sidecar(workspace: &ViewHandle<Workspace>, app: &mut App) {
                 menu.items().iter().position(|item| {
                     matches!(
                         item,
-                        MenuItem::Item(fields) if fields.label() == "New worktree config"
+                        MenuItem::Item(fields) if fields.label() == "workspace-new-worktree-config"
                     )
                 })
             })
@@ -385,7 +399,7 @@ fn test_worktree_sidecar_pointer_entry_does_not_select_top_repo() {
                     menu.items().iter().position(|item| {
                         matches!(
                             item,
-                            MenuItem::Item(fields) if fields.label() == "New worktree config"
+                            MenuItem::Item(fields) if fields.label() == "workspace-new-worktree-config"
                         )
                     })
                 })
@@ -2686,11 +2700,11 @@ fn test_unified_new_session_menu_uses_new_worktree_config_label_and_order() {
 
             assert_eq!(
                 labels.get(separator_index + 1),
-                Some(&"New worktree config".to_string())
+                Some(&"workspace-new-worktree-config".to_string())
             );
             assert_eq!(
                 labels.get(separator_index + 2),
-                Some(&"New tab config".to_string())
+                Some(&"workspace-new-tab-config".to_string())
             );
         });
     });

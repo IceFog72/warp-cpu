@@ -156,6 +156,29 @@ impl AmbientAgentViewModel {
         }
     }
 
+    /// Creates a minimal [`AmbientAgentViewModel`] for unit tests that do not exercise
+    /// cloud-agent functionality.  Unlike [`new`], this constructor does not subscribe to
+    /// `CloudModel` or `UpdateManager`, so those singletons need not be registered.
+    #[cfg(test)]
+    pub fn new_for_test(_ctx: &mut warpui::ModelContext<Self>) -> Self {
+        use warpui::EntityId;
+        Self {
+            status: Status::NotAmbientAgent,
+            request: None,
+            terminal_view_id: EntityId::new(),
+            has_parent_terminal: false,
+            environment_id: None,
+            progress_timer_handle: None,
+            ui_state: AmbientAgentProgressUIState::new(_ctx),
+            setup_commands_state: Default::default(),
+            task_id: None,
+            conversation_id: None,
+            harness: Default::default(),
+            has_inserted_cloud_mode_user_query_block: false,
+            harness_command_started: false,
+        }
+    }
+
     pub fn request(&self) -> Option<&SpawnAgentRequest> {
         self.request.as_ref()
     }
@@ -688,7 +711,7 @@ impl AmbientAgentViewModel {
                         }
 
                         if matches!(me.status, Status::WaitingForSession { .. }) {
-                            // 去云端分支:不再展示 cloud agent capacity 模态
+                            // Cloud-agent branch: no longer shows the cloud agent capacity modal
                         }
                     }
                     AmbientAgentEvent::TimedOut => {}
@@ -720,7 +743,7 @@ impl AmbientAgentViewModel {
                     }
                     if let Some(capacity_error) = err.downcast_ref::<CloudAgentCapacityError>() {
                         me.handle_spawn_error(capacity_error.error.clone(), ctx);
-                        // 去云端分支:不再展示 cloud agent capacity 模态
+                        // Disabled cloud-agent branch: no longer shows the cloud agent capacity modal
                         return;
                     }
                     if let Some(ai_api_error) = err.downcast_ref::<AIApiError>() {

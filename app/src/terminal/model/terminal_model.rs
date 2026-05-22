@@ -450,23 +450,24 @@ impl TmuxControlModeContext {
     }
 }
 
-/// 描述终端输出的形状，用于低CPU软件渲染时决定是否可以跳过帧。
+/// Describes the shape of terminal output, used in software-rendering low-CPU mode
+/// to decide whether a frame can be skipped.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TerminalOutputShape {
-    /// 未知/默认（无输出或无法分类）。
+    /// Unknown / default (no output or unclassifiable).
     Unknown,
-    /// 批量输出（多行或大量字节），需要完整渲染。
+    /// Bulk output (multi-line or large byte count) that requires a full render.
     Bulk,
-    /// 同行短暂更新，如 spinner（含 `\r` 或退格），可以节流跳帧。
+    /// Short in-place update on the same line (e.g. a spinner using `\r` or backspace); can be throttled.
     EphemeralSameLine,
 }
 
-/// 根据原始 PTY 字节对输出形状进行分类。
+/// Classifies the output shape from raw PTY bytes.
 ///
-/// - 空字节 → `Unknown`
-/// - ≥ 4096 字节 或 ≥ 2 个换行符 → `Bulk`
-/// - ≤ 64 字节且含 `\r` 或退格（0x08）→ `EphemeralSameLine`
-/// - 其余 → `Bulk`
+/// - Empty bytes → `Unknown`
+/// - ≥ 4096 bytes or ≥ 2 newlines → `Bulk`
+/// - ≤ 64 bytes containing `\r` or backspace (0x08) → `EphemeralSameLine`
+/// - Everything else → `Bulk`
 pub fn classify_terminal_output_shape(bytes: &[u8]) -> TerminalOutputShape {
     if bytes.is_empty() {
         return TerminalOutputShape::Unknown;
@@ -541,9 +542,9 @@ pub struct TerminalModel {
     /// This is used to implement demand-driven rendering.
     generation: std::sync::atomic::AtomicU64,
 
-    /// 最近一次字节处理的输出形状分类，用于软件渲染节流。
+    /// The most recent byte batch's output shape, used for software rendering throttling.
     last_output_shape: TerminalOutputShape,
-    /// 设置 `last_output_shape` 时对应的 generation 值。
+    /// The generation value when `last_output_shape` was set.
     last_output_shape_generation: u64,
 
     /// Partially populated `SessionInfo` from the `InitShell` DCS payload.
@@ -1732,12 +1733,12 @@ impl TerminalModel {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// 返回最近一次字节处理的输出形状分类。
+    /// Returns the most recent byte batch's output shape.
     pub fn output_shape(&self) -> TerminalOutputShape {
         self.last_output_shape
     }
 
-    /// 返回设置最近输出形状时对应的 generation 值。
+    /// Returns the generation value when the recent output shape was set.
     pub fn output_shape_generation(&self) -> u64 {
         self.last_output_shape_generation
     }
@@ -3710,46 +3711,6 @@ pub enum ExitReason {
     ProcessKilled,
     /// Shell could not be found/determined
     ShellNotFound,
-}
-
-/// Classifies terminal output into categories for frame pacing decisions.
-///
-/// Used in software rendering low-CPU mode to distinguish between:
-/// - Ephemeral same-line output (spinner dots, progress indicators)
-/// - Bulk output (file listings, build output)
-/// - Unknown patterns
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TerminalOutputShape {
-    /// Pattern not yet classified or unknown pattern.
-    Unknown,
-    /// Large output or multi-line (e.g., bulk file listings, build output).
-    Bulk,
-    /// Small output using carriage returns or backspaces on same line (spinners, progress dots).
-    EphemeralSameLine,
-}
-
-/// Classify a byte sequence into output shape for frame-pacing hints.
-///
-/// Returns:
-/// - `Bulk` if output is >= 4096 bytes or contains 2+ newlines.
-/// - `EphemeralSameLine` if output is small and contains carriage returns (`\r`) or backspaces (`\x08`).
-/// - `Unknown` otherwise.
-pub fn classify_terminal_output_shape(bytes: &[u8]) -> TerminalOutputShape {
-    if bytes.is_empty() {
-        return TerminalOutputShape::Unknown;
-    }
-
-    // Classify as bulk if large or multi-line.
-    if bytes.len() >= 4096 || bytes.iter().filter(|b| **b == b'\n').count() >= 2 {
-        return TerminalOutputShape::Bulk;
-    }
-
-    // Classify as ephemeral same-line if small and contains CR or backspace.
-    if bytes.len() <= 64 && bytes.iter().any(|b| matches!(*b, b'\r' | 0x08)) {
-        return TerminalOutputShape::EphemeralSameLine;
-    }
-
-    TerminalOutputShape::Bulk
 }
 
 #[cfg(test)]

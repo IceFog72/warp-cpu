@@ -23,8 +23,9 @@ pub struct RestoredAgentConversations {
 }
 
 impl RestoredAgentConversations {
-    /// 转换持久化会话; 把转换失败的 conversation_id 收集起来,调用方负责把它们从 sqlite 中清理掉,
-    /// 否则下次启动会重复尝试转换并打 warn,白白拖慢启动。
+    /// Converts persisted conversations; failed `conversation_id`s are collected into the
+    /// returned `Vec<String>` so callers can purge them from SQLite.  Without cleanup, Warp
+    /// would retry the failing conversion on every startup, logging a warn and slowing boot.
     pub fn new(conversations: Vec<AgentConversation>) -> (Self, Vec<String>) {
         let mut conversations_by_id = HashMap::new();
         let mut failed_to_restore = Vec::new();

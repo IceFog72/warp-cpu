@@ -5,6 +5,7 @@ use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::blocklist::{AIQueryHistory, BlocklistAIPermissions};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use crate::ai::agent_providers::AgentProviderSecrets;
 use crate::ai::llms::LLMPreferences;
 use crate::ai::mcp::gallery::MCPGalleryManager;
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
@@ -139,6 +140,7 @@ pub fn initialize_app(app: &mut App) {
     app.add_singleton_model(|_| AuthStateProvider::new_for_test());
     app.add_singleton_model(AppTelemetryContextProvider::new_context_provider);
     app.add_singleton_model(AuthManager::new_for_test);
+    app.add_singleton_model(AgentProviderSecrets::new);
     app.add_singleton_model(LLMPreferences::new);
     app.add_singleton_model(SessionPermissionsManager::new);
     app.add_singleton_model(DirectoryWatcher::new);
@@ -186,7 +188,7 @@ pub fn initialize_app(app: &mut App) {
 
     app.update(experiments::init);
     AltScreenReporting::register(app);
-    app.add_singleton_model(|_| RestoredAgentConversations::new(vec![]));
+    app.add_singleton_model(|_| RestoredAgentConversations::default());
     app.add_singleton_model(OneTimeModalModel::new);
     app.add_singleton_model(|_| WorkspaceRegistry::new());
     app.add_singleton_model(|_| ToastStack);

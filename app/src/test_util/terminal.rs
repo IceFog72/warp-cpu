@@ -24,6 +24,7 @@ use super::settings::initialize_settings_for_tests;
 use crate::ai::blocklist::BlocklistAIPermissions;
 use crate::ai::blocklist::SerializedBlockListItem;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use crate::ai::agent_providers::AgentProviderSecrets;
 use crate::ai::llms::LLMPreferences;
 use crate::ai::outline::RepoOutlines;
 use crate::ai::restored_conversations::RestoredAgentConversations;
@@ -106,6 +107,7 @@ pub fn initialize_app_for_terminal_view(app: &mut App) {
     app.add_singleton_model(|_| AuthStateProvider::new_for_test());
     app.add_singleton_model(AppTelemetryContextProvider::new_context_provider);
     app.add_singleton_model(AuthManager::new_for_test);
+    app.add_singleton_model(AgentProviderSecrets::new);
     app.add_singleton_model(LLMPreferences::new);
     app.add_singleton_model(SessionPermissionsManager::new);
     app.add_singleton_model(DirectoryWatcher::new);
@@ -131,7 +133,7 @@ pub fn initialize_app_for_terminal_view(app: &mut App) {
     #[cfg(not(target_family = "wasm"))]
     app.add_singleton_model(SystemInfo::new);
 
-    app.add_singleton_model(|_| RestoredAgentConversations::new(vec![]));
+    app.add_singleton_model(|_| RestoredAgentConversations::default());
     app.add_singleton_model(OneTimeModalModel::new);
     app.add_singleton_model(|_| WorkspaceRegistry::new());
     app.add_singleton_model(|_| IgnoredSuggestionsModel::new(vec![]));

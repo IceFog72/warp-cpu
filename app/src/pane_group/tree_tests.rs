@@ -1,6 +1,17 @@
 use super::*;
 
 #[test]
+fn test_resize_flex_pair_accumulates_before_layout() {
+    let (flex_1, flex_2) =
+        resize_flex_pair(1.0, 1.0, 1000.0, 10.0, 50.0).expect("first resize should apply");
+    let (flex_1, flex_2) =
+        resize_flex_pair(flex_1, flex_2, 1000.0, 10.0, 50.0).expect("second resize should apply");
+
+    assert!((flex_1 - 1.04).abs() < f32::EPSILON);
+    assert!((flex_2 - 0.96).abs() < f32::EPSILON);
+}
+
+#[test]
 fn test_split_pane_layout() {
     let panes = [
         PaneId::dummy_pane_id(),

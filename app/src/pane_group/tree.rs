@@ -1120,29 +1120,21 @@ impl PaneBranch {
             let flex_1 = self.nodes[idx].0 .0;
             let flex_2 = self.nodes[idx + 1].0 .0;
 
-            let total_flex = flex_1 + flex_2;
-
             let (size_1, size_2) = match self.axis {
                 SplitDirection::Horizontal => (pane_size_1.x(), pane_size_2.x()),
                 SplitDirection::Vertical => (pane_size_1.y(), pane_size_2.y()),
             };
 
-            // Omit noise in dragging.
-            let minimum_pane_size = get_minimum_pane_size(ctx);
-            if size_1 + delta < minimum_pane_size
-                || size_2 - delta < minimum_pane_size
-                || delta.abs() < f32::EPSILON
-            {
-                return true;
+            if let Some((new_flex_1, new_flex_2)) = resize_flex_pair(
+                flex_1,
+                flex_2,
+                size_1 + size_2,
+                delta,
+                get_minimum_pane_size(ctx),
+            ) {
+                self.nodes[idx].0 = PaneFlex(new_flex_1);
+                self.nodes[idx + 1].0 = PaneFlex(new_flex_2);
             }
-
-            // Re-distribute the flex factors.
-            let new_flex = ((size_1 + delta) / (size_1 + size_2) * total_flex)
-                .max(0.)
-                .min(total_flex);
-
-            self.nodes[idx].0 = PaneFlex(new_flex);
-            self.nodes[idx + 1].0 = PaneFlex(total_flex - new_flex);
 
             return true;
         }
@@ -1268,6 +1260,27 @@ impl PaneBranch {
             .iter()
             .any(|(_, node)| node.has_children_hidden_for_move(hidden_panes))
     }
+}
+
+fn resize_flex_pair(
+    flex_1: f32,
+    flex_2: f32,
+    total_size: f32,
+    delta: f32,
+    minimum_pane_size: f32,
+) -> Option<(f32, f32)> {
+    let total_flex = flex_1 + flex_2;
+    let size_1 = total_size * flex_1 / total_flex;
+    let size_2 = total_size - size_1;
+    if size_1 + delta < minimum_pane_size
+        || size_2 - delta < minimum_pane_size
+        || delta.abs() < f32::EPSILON
+    {
+        return None;
+    }
+
+    let new_flex_1 = (flex_1 + delta / total_size * total_flex).clamp(0., total_flex);
+    Some((new_flex_1, total_flex - new_flex_1))
 }
 
 fn pane_hidden_for_job(hidden_panes: &[HiddenPane], id: &PaneId) -> bool {

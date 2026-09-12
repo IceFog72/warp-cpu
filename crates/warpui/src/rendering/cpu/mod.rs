@@ -25,13 +25,18 @@ use warpui_core::elements::Fill;
 #[path = "tests.rs"]
 mod tests;
 
-/// Opt-in switch. Separate from `WARP_FORCE_SOFTWARE` (which keeps meaning
-/// "llvmpipe via wgpu") so existing software users are not hijacked by this
-/// experimental path.
+/// Opt-in switch. `WARP_CPU_RENDERER` is the developer override; the settings
+/// bridge uses a separate variable so disabling the persisted setting can take
+/// effect after a relaunch without mistaking the previous value for an
+/// explicit override.
 pub fn cpu_renderer_requested() -> bool {
-    std::env::var("WARP_CPU_RENDERER")
-        .ok()
-        .is_some_and(|val| val == "1" || val.eq_ignore_ascii_case("true"))
+    ["WARP_CPU_RENDERER", "WARP_CPU_RENDERER_FROM_SETTINGS"]
+        .into_iter()
+        .any(|key| {
+            std::env::var(key)
+                .ok()
+                .is_some_and(|val| val == "1" || val.eq_ignore_ascii_case("true"))
+        })
 }
 
 /// Pack to softbuffer 0.4's documented `u32` pixel format:

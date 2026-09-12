@@ -12,6 +12,15 @@ define_settings_group!(GPUSettings, settings: [
        toml_path: "system.force_software_rendering",
        description: "Whether to force CPU software rendering on Linux.",
    },
+   cpu_renderer: CpuRenderer {
+       type: bool,
+       default: false,
+       supported_platforms: SupportedPlatforms::LINUX,
+       sync_to_cloud: SyncToCloud::Never,
+       private: false,
+       toml_path: "system.cpu_renderer",
+       description: "Whether to use the CPU renderer on Linux.",
+   },
    prefer_low_power_gpu: PreferLowPowerGPU {
        type: bool,
        // Opt for the low power (integrated) GPU on Windows / Linux since discrete GPUs tend to be

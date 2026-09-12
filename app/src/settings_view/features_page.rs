@@ -45,7 +45,7 @@ use crate::settings::{
 use crate::settings::{
     AliasExpansionEnabled, AliasExpansionSettings, AppEditorSettings, AtContextMenuInTerminalMode,
     AutocompleteSymbols, AutosuggestionKeybindingHint, CloudPreferencesSettings, CodeSettings,
-    CommandCorrections, CompletionsOpenWhileTyping, CopyOnSelect, CtrlTabBehavior,
+    CommandCorrections, CompletionsOpenWhileTyping, CopyOnSelect, CpuRenderer, CtrlTabBehavior,
     DefaultSessionMode, EnableSlashCommandsInTerminal, EnableSshWrapper, ErrorUnderliningEnabled,
     ExtraMetaKeys, ForceSoftwareRendering, GPUSettings, GlobalHotkeyMode, InputSettings,
     InputSettingsChangedEvent, LinuxSelectionClipboard, MiddleClickPasteEnabled,
@@ -663,6 +663,7 @@ pub enum FeaturesPageAction {
     ToggleUseAudibleBell,
     ToggleShowTerminalZeroStateBlock,
     ToggleForceSoftwareRendering,
+    ToggleCpuRenderer,
     TogglePreferLowPowerGPU,
     ToggleVimMode,
     ToggleVimUnnamedSystemClipboard,
@@ -1153,6 +1154,13 @@ impl FeaturesPageAction {
                 TelemetryEvent::FeaturesPageAction {
                     action: "ToggleForceSoftwareRendering".to_string(),
                     value: to_string(*gpu_settings.force_software_rendering.value()),
+                }
+            }
+            Self::ToggleCpuRenderer => {
+                let gpu_settings = GPUSettings::as_ref(ctx);
+                TelemetryEvent::FeaturesPageAction {
+                    action: "ToggleCpuRenderer".to_string(),
+                    value: to_string(*gpu_settings.cpu_renderer.value()),
                 }
             }
             Self::SetPreferredGraphicsBackend(backend) => TelemetryEvent::FeaturesPageAction {
@@ -1879,6 +1887,13 @@ impl TypedActionView for FeaturesPageView {
                     report_if_error!(gpu_settings
                         .force_software_rendering
                         .toggle_and_save_value(ctx));
+                });
+                self.software_rendering_changed = true;
+                ctx.notify();
+            }
+            ToggleCpuRenderer => {
+                GPUSettings::handle(ctx).update(ctx, |gpu_settings, ctx| {
+                    report_if_error!(gpu_settings.cpu_renderer.toggle_and_save_value(ctx));
                 });
                 self.software_rendering_changed = true;
                 ctx.notify();
@@ -2793,6 +2808,10 @@ impl FeaturesPageView {
             .is_supported_on_current_platform()
         {
             system_widgets.push(Box::new(SoftwareRenderingWidget::default()));
+        }
+
+        if gpu_settings.cpu_renderer.is_supported_on_current_platform() {
+            system_widgets.push(Box::new(CpuRendererWidget::default()));
         }
 
         if gpu_settings
@@ -7107,6 +7126,72 @@ impl SettingsWidget for SoftwareRenderingWidget {
             secondary_text.push_str(&crate::t!("settings-features-restart-warp-to-apply"));
         }
 
+        let theme = appearance.theme();
+        col.add_child(
+            appearance
+                .ui_builder()
+                .wrappable_text(secondary_text, true)
+                .with_style(UiComponentStyles {
+                    font_color: Some(theme.sub_text_color(theme.background()).into_solid()),
+                    ..Default::default()
+                })
+                .build()
+                .finish(),
+        );
+        col.finish()
+    }
+}
+
+#[derive(Default)]
+struct CpuRendererWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for CpuRendererWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "cpu renderer softbuffer software rendering"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let gpu_settings = GPUSettings::as_ref(app);
+        let body = render_body_item::<FeaturesPageAction>(
+            crate::t!("settings-features-cpu-renderer"),
+            None,
+            LocalOnlyIconState::for_setting(
+                CpuRenderer::storage_key(),
+                CpuRenderer::sync_to_cloud(),
+                &mut view
+                    .button_mouse_states
+                    .local_only_icon_tooltip_states
+                    .borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.switch_state.clone())
+                .check(*gpu_settings.cpu_renderer)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(FeaturesPageAction::ToggleCpuRenderer)
+                })
+                .finish(),
+            None,
+        );
+        let mut col = Flex::column().with_child(body);
+        let mut secondary_text = crate::t!("settings-features-cpu-renderer-description");
+        if view.software_rendering_changed {
+            secondary_text.push_str("\n\n");
+            secondary_text.push_str(&crate::t!("settings-features-restart-warp-to-apply"));
+        }
         let theme = appearance.theme();
         col.add_child(
             appearance

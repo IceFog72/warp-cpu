@@ -1063,7 +1063,7 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
 fn apply_software_rendering_environment(
     prefs_for_public_settings: &dyn warpui_extras::user_preferences::UserPreferences,
 ) {
-    use crate::settings::ForceSoftwareRendering;
+    use crate::settings::{CpuRenderer, ForceSoftwareRendering};
 
     let env_forces_software = std::env::var("WARP_FORCE_SOFTWARE")
         .ok()
@@ -1089,6 +1089,16 @@ fn apply_software_rendering_environment(
         remove_env_if_value("LIBGL_ALWAYS_SOFTWARE", "1");
         remove_env_if_value("WGPU_BACKEND", "gl");
         remove_env_if_value("MESA_LOADER_DRIVER_OVERRIDE", "kms_swrast");
+    }
+
+    let setting_enables_cpu_renderer = CpuRenderer::read_from_preferences(
+        prefs_for_public_settings,
+    )
+    .unwrap_or_else(CpuRenderer::default_value);
+    if setting_enables_cpu_renderer {
+        std::env::set_var("WARP_CPU_RENDERER_FROM_SETTINGS", "1");
+    } else {
+        remove_env_if_value("WARP_CPU_RENDERER_FROM_SETTINGS", "1");
     }
 }
 

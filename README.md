@@ -13,12 +13,18 @@ and keeping every credential local.
 
 > ⚠️ Early development. No official release yet. **Not affiliated with Warp, Inc.**
 
-### 🖥️ Linux CPU Rendering (llvmpipe)
-CPU software rendering is enabled by default on Linux. To switch between CPU and GPU rendering, open Settings → Features → System → Force CPU software rendering, then restart Warp.
+### 🖥️ Linux CPU Rendering
+Linux has two CPU-rendering paths:
 
-If you want to force CPU rendering from a shell regardless of the saved setting, run:
+- **Force CPU software rendering** keeps the normal wgpu renderer but uses Mesa's `llvmpipe`. This remains enabled by default and can be changed under Settings → Features → System.
+- **Use CPU renderer** uses Warp's CPU rasterizer with `softbuffer`, avoiding both wgpu and `llvmpipe`. Enable it under Settings → Features → System → Use CPU renderer, then restart Warp.
+
+For one-off developer overrides, set the corresponding environment variable before launching Warp:
+
 ```bash
-env __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json LIBGL_ALWAYS_SOFTWARE=1 WGPU_BACKEND=gl WARP_FORCE_SOFTWARE=1 warp-terminal-oss
+WARP_CPU_RENDERER=1 warp-terminal-oss
+# Or force the llvmpipe path:
+WARP_FORCE_SOFTWARE=1 warp-terminal-oss
 ```
 
 </div>

@@ -87,8 +87,8 @@ the experience is identical to Warp, but every layer is yours.
 ## 📦 Build from source
 
 ```bash
-git clone https://github.com/zerx-lab/openwarp
-cd openwarp
+git clone https://github.com/IceFog72/warp-cpu.git
+cd warp-cpu
 ./script/bootstrap   # platform-specific deps
 ./script/run         # build & run
 ./script/presubmit   # fmt / clippy / tests
@@ -101,12 +101,22 @@ cargo build --release --bin warp-oss
 cargo run   --release --bin warp-oss
 ```
 
+To build the optimized `release-lto` binary and install it system-wide, use [`script/build-and-install.sh`](script/build-and-install.sh). It installs the OSS launcher, compatibility symlink, desktop entry, and icons; `sudo` is used for the system install:
+
+```bash
+./script/build-and-install.sh oss
+# Equivalent form:
+./script/build-and-install.sh --channel oss
+```
+
+The script also accepts `dev` or `local` channels. The OSS launcher is installed as `warp-terminal-oss` with `warp-oss` as a compatibility command.
+
 > ⚠️ Do not run `cargo build --release` / `cargo run --release --bin {warp,stable,dev,preview}`
 > without a filter — those entry points (`local.rs` / `stable.rs` / `dev.rs` / `preview.rs`) load
 > their channel config through Warp's private `warp-channel-config` binary, which lives in a
 > closed-source repo. Compilation succeeds, but the resulting executables panic at startup
 > asking you to run `./script/install_channel_config`. That script clones an SSH repo only
-> Warp employees can access. OpenWarp users only need the `warp-oss` binary.
+> Warp employees can access. warp-cpu users only need the `warp-oss` binary.
 
 See [WARP.md](WARP.md) for the full engineering guide (style, testing, platform notes).
 

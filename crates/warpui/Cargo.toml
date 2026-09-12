@@ -25,6 +25,10 @@ settings_value = ["warpui_core/settings_value"]
 # Enables utilities for testing.
 test-util = ["warpui_core/test-util"]
 experimental-wgpu-renderer = ["dep:wgpu", "dep:bytemuck", "dep:version-compare"]
+# CPU raster present path for Linux software rendering: Scene -> pixels ->
+# softbuffer, no wgpu/llvmpipe. Linux-only; enabling elsewhere fails on the
+# target-gated dep below.
+cpu-renderer = ["dep:softbuffer"]
 
 [dependencies]
 async-task.workspace = true
@@ -138,6 +142,7 @@ urlencoding = "2.1.3"
 x11rb.workspace = true
 x11-dl = "2.21.0"
 zbus.workspace = true
+softbuffer = { version = "0.4", optional = true }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dev-dependencies]
 virtual-fs.workspace = true

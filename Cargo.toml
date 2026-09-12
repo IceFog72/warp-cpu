@@ -462,6 +462,8 @@ fdeflate.opt-level = 3
 image.opt-level = 3
 png.opt-level = 3
 miniz_oxide.opt-level = 3
+# Keep CPU rasterization interactive in development builds.
+warpui.opt-level = 3
 
 # A profile that behaves like release but enables ThinLTO, which should produce
 # binaries with better runtime performance with little build-time overhead.

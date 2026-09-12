@@ -367,6 +367,9 @@ minidumper = { version = "0.8.3", optional = true }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 freedesktop-desktop-entry = "0.5.0"
+# Wire the CPU raster present path into desktop builds; activated at
+# runtime via WARP_CPU_RENDERER=1. No-op on other platforms.
+warpui = { workspace = true, features = ["cpu-renderer"] }
 x11rb.workspace = true
 zbus.workspace = true
 

@@ -697,6 +697,14 @@ struct Inner {
     gpu_power_preference: GPUPowerPreference,
     backend_preference: Option<wgpu::Backend>,
     rendering_resources: Option<RenderingResources>,
+    /// CPU present path state. `Some` iff the window runs on softbuffer;
+    /// then `rendering_resources` is `None` and no wgpu device exists.
+    /// `graphics_backend()` reports `Empty` for these windows.
+    #[cfg(all(
+        feature = "cpu-renderer",
+        any(target_os = "linux", target_os = "freebsd")
+    ))]
+    cpu_backend: Option<CpuBackend>,
     /// Callback that reports when a GPU device is selected. We need to store this on the window
     /// because we may attempt to recreate resources (which in turns reselects a GPU device) to
     /// handle cases where wgpu treats the device as "lost" when the system is waking up from sleep.
@@ -718,6 +726,65 @@ impl Inner {
         self.window.inner_size()
     }
 }
+
+/// Owned softbuffer state for the CPU present path. `Surface` owns its
+/// native resources (no borrow of `context`), so both live as siblings.
+#[cfg(all(
+    feature = "cpu-renderer",
+    any(target_os = "linux", target_os = "freebsd")
+))]
+struct CpuBackend {
+    #[allow(dead_code)]
+    context: softbuffer::Context<OwnedDisplayHandle>,
+    surface: softbuffer::Surface<OwnedDisplayHandle, Arc<winit::window::Window>>,
+    /// Last resized size; `resize` is skipped while unchanged.
+    size: (u32, u32),
+    /// Persistent glyph bitmaps. Without this, the CPU path rerasterizes
+    /// every visible character through FreeType on every redraw.
+    glyph_cache: crate::rendering::cpu::CpuGlyphCache,
+    /// Scene identity of the last successful CPU present. A redraw of
+    /// the exact same Rc can be skipped when size/capture are unchanged.
+    last_presented_scene: Option<Rc<Scene>>,
+    perf_window_started: instant::Instant,
+    perf_presents: u32,
+    perf_skipped_same_scene: u32,
+    perf_acquire_ns: u128,
+    perf_raster_ns: u128,
+    perf_present_ns: u128,
+    /// First-frame diagnostics (scene stats + /tmp/cpufirst.ppm) emitted once.
+    logged: bool,
+}
+
+#[cfg(all(
+    feature = "cpu-renderer",
+    any(target_os = "linux", target_os = "freebsd")
+))]
+impl CpuBackend {
+    fn log_perf_if_due(&mut self) {
+        let elapsed = self.perf_window_started.elapsed();
+        if elapsed < std::time::Duration::from_secs(2) {
+            return;
+        }
+        let seconds = elapsed.as_secs_f64().max(0.001);
+        let presents = self.perf_presents;
+        let denom = f64::from(presents.max(1));
+        log::info!(
+            "cpu renderer perf: presents/s={:.1} skipped_same_scene/s={:.1} acquire_ms/frame={:.2} raster_ms/frame={:.2} present_ms/frame={:.2}",
+            f64::from(presents) / seconds,
+            f64::from(self.perf_skipped_same_scene) / seconds,
+            self.perf_acquire_ns as f64 / 1_000_000.0 / denom,
+            self.perf_raster_ns as f64 / 1_000_000.0 / denom,
+            self.perf_present_ns as f64 / 1_000_000.0 / denom,
+        );
+        self.perf_window_started = instant::Instant::now();
+        self.perf_presents = 0;
+        self.perf_skipped_same_scene = 0;
+        self.perf_acquire_ns = 0;
+        self.perf_raster_ns = 0;
+        self.perf_present_ns = 0;
+    }
+}
+
 
 pub(super) const DEFAULT_TITLEBAR_HEIGHT: f32 = 35.0;
 
@@ -781,6 +848,62 @@ impl Window {
 
         let gpu_power_preference = window_options.gpu_power_preference;
         let backend_preference = window_options.backend_preference.map(to_wgpu_backend);
+        let window_id = window.id();
+
+        #[cfg(all(
+            feature = "cpu-renderer",
+            any(target_os = "linux", target_os = "freebsd")
+        ))]
+        if crate::rendering::cpu::cpu_renderer_requested() {
+            use std::num::NonZeroU32;
+
+            let context = softbuffer::Context::new(window_target.owned_display_handle())
+                .map_err(|err| anyhow::anyhow!("cpu renderer: context: {err:?}"))?;
+            let mut surface = softbuffer::Surface::new(&context, window.clone())
+                .map_err(|err| anyhow::anyhow!("cpu renderer: surface: {err:?}"))?;
+            let size = (
+                initial_surface_size.x() as u32,
+                initial_surface_size.y() as u32,
+            );
+            if let (Some(width), Some(height)) = (NonZeroU32::new(size.0), NonZeroU32::new(size.1))
+            {
+                surface
+                    .resize(width, height)
+                    .map_err(|err| anyhow::anyhow!("cpu renderer: initial resize: {err:?}"))?;
+            }
+            self.inner.replace(Some(Inner {
+                window,
+                #[cfg(windows)]
+                is_cloaked: true,
+                gpu_power_preference,
+                backend_preference,
+                rendering_resources: None,
+                cpu_backend: Some(CpuBackend {
+                    context,
+                    surface,
+                    size,
+                    glyph_cache: crate::rendering::cpu::CpuGlyphCache::new(
+                        GlyphConfig::default(),
+                    ),
+                    last_presented_scene: None,
+                    perf_window_started: instant::Instant::now(),
+                    perf_presents: 0,
+                    perf_skipped_same_scene: 0,
+                    perf_acquire_ns: 0,
+                    perf_raster_ns: 0,
+                    perf_present_ns: 0,
+                    logged: false,
+                }),
+                on_gpu_device_selected: window_options.on_gpu_device_info_reported,
+                active_drag_resize_direction: None,
+                surface_size: initial_surface_size,
+                surface_requires_reconfiguration: false,
+                is_occluded: false,
+                level: window_level_for_style(window_options.style),
+            }));
+            return Ok(window_id);
+        }
+
         let resources = Resources::new(
             window.clone(),
             gpu_power_preference,
@@ -794,7 +917,7 @@ impl Window {
 
         let renderer = Renderer::new(&resources, GlyphConfig::default());
 
-        let window_id = window.id();
+
         self.inner.replace(Some(Inner {
             window,
             #[cfg(windows)]
@@ -805,6 +928,11 @@ impl Window {
                 resources,
                 renderer,
             }),
+            #[cfg(all(
+                feature = "cpu-renderer",
+                any(target_os = "linux", target_os = "freebsd")
+            ))]
+            cpu_backend: None,
             on_gpu_device_selected: window_options.on_gpu_device_info_reported,
             active_drag_resize_direction: None,
             surface_size: initial_surface_size,
@@ -823,6 +951,18 @@ impl Window {
         };
 
         let window_size = inner.physical_size().to_vec2f();
+
+        #[cfg(all(
+            feature = "cpu-renderer",
+            any(target_os = "linux", target_os = "freebsd")
+        ))]
+        if inner.cpu_backend.is_some() {
+            // CPU path has no swapchain to reconfigure; track size and
+            // resize lazily at present time.
+            inner.surface_size = window_size;
+            inner.surface_requires_reconfiguration = false;
+            return Ok(());
+        }
 
         let Some(RenderingResources { resources, .. }) = inner.rendering_resources.as_mut() else {
             return Ok(());
@@ -871,6 +1011,25 @@ impl Window {
             );
             return Ok(());
         };
+
+        #[cfg(all(
+            feature = "cpu-renderer",
+            any(target_os = "linux", target_os = "freebsd")
+        ))]
+        if self
+            .inner
+            .borrow()
+            .as_ref()
+            .is_some_and(|inner| inner.cpu_backend.is_some())
+        {
+            self.render_cpu(scene.clone(), font_cache)?;
+            self.redraw_pending.set(false);
+            drop(scene);
+            if self.needs_rebuild.get() {
+                self.request_redraw_if_visible();
+            }
+            return Ok(());
+        }
 
         {
             let mut inner_ref = self.inner.borrow_mut();
@@ -937,6 +1096,118 @@ impl Window {
         Ok(())
     }
 
+    /// CPU present path: raster `scene` into softbuffer pixels and present.
+    /// Never touches wgpu (no device poll, no texture readback); frame
+    /// capture is a memcpy. Errors degrade to skipping the frame, never to
+    /// breaking the redraw loop (spike policy).
+    #[cfg(all(
+        feature = "cpu-renderer",
+        any(target_os = "linux", target_os = "freebsd")
+    ))]
+    fn render_cpu(
+        &self,
+        scene: Rc<Scene>,
+        font_cache: &fonts::Cache,
+    ) -> Result<(), renderer::Error> {
+        use std::num::NonZeroU32;
+
+        let mut inner_ref = self.inner.borrow_mut();
+        let Some(inner) = inner_ref.as_mut() else {
+            log::warn!("Tried to render a window before it had been fully initialized");
+            return Ok(());
+        };
+        let Some(cpu) = inner.cpu_backend.as_mut() else {
+            return Ok(());
+        };
+        let width = inner.surface_size.x() as u32;
+        let height = inner.surface_size.y() as u32;
+        if width == 0 || height == 0 {
+            return Ok(());
+        }
+
+        let mut resized = false;
+        if cpu.size != (width, height) {
+            if let (Some(nz_width), Some(nz_height)) =
+                (NonZeroU32::new(width), NonZeroU32::new(height))
+            {
+                if cpu.surface.resize(nz_width, nz_height).is_err() {
+                    log::warn!("cpu renderer: surface resize failed");
+                    return Ok(());
+                }
+                cpu.size = (width, height);
+                cpu.last_presented_scene = None;
+                resized = true;
+            }
+        }
+
+        // A winit redraw can arrive without a rebuilt scene. Rendering the exact
+        // same Rc again is pure duplicate work for the CPU path. Do not suppress
+        // resize repaint or frame capture, both of which need real framebuffer work.
+        let capture_pending = self.capture_callback.borrow().is_some();
+        if !resized
+            && !capture_pending
+            && cpu
+                .last_presented_scene
+                .as_ref()
+                .is_some_and(|last| Rc::ptr_eq(last, &scene))
+        {
+            cpu.perf_skipped_same_scene += 1;
+            cpu.log_perf_if_due();
+            return Ok(());
+        }
+
+        let acquire_started = instant::Instant::now();
+        let Ok(mut buffer) = cpu.surface.buffer_mut() else {
+            log::warn!("cpu renderer: buffer_mut failed");
+            return Ok(());
+        };
+        let acquire_ns = acquire_started.elapsed().as_nanos();
+
+        let raster_started = instant::Instant::now();
+        crate::rendering::cpu::draw_scene(
+            &mut buffer,
+            width,
+            height,
+            &scene,
+            font_cache,
+            &GlyphConfig::default(),
+            &mut cpu.glyph_cache,
+        );
+        let raster_ns = raster_started.elapsed().as_nanos();
+
+        if !cpu.logged {
+            cpu.logged = true;
+            crate::rendering::cpu::log_first_frame(&scene, &buffer, width, height);
+        }
+        if let Some(callback) = self.capture_callback.borrow_mut().take() {
+            let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+            for px in buffer.iter() {
+                rgba.push((px >> 16) as u8);
+                rgba.push((px >> 8) as u8);
+                rgba.push(*px as u8);
+                rgba.push(255);
+            }
+            callback(platform::CapturedFrame::new(width, height, rgba));
+        }
+
+        inner.window.pre_present_notify();
+        let present_started = instant::Instant::now();
+        let present_result = buffer.present();
+        let present_ns = present_started.elapsed().as_nanos();
+
+        cpu.perf_presents += 1;
+        cpu.perf_acquire_ns += acquire_ns;
+        cpu.perf_raster_ns += raster_ns;
+        cpu.perf_present_ns += present_ns;
+        if present_result.is_err() {
+            log::warn!("cpu renderer: present failed");
+        } else {
+            cpu.last_presented_scene = Some(scene);
+        }
+        cpu.log_perf_if_due();
+        Ok(())
+    }
+
     /// Drops the window's renderer and all associated resources.
     #[cfg_attr(not(any(target_os = "linux", target_os = "freebsd")), allow(dead_code))]
     pub fn drop_renderer(&self, display_handle: Box<dyn wgpu::wgt::WgpuHasDisplayHandle>) {
@@ -947,6 +1218,15 @@ impl Window {
         };
 
         let _ = inner.rendering_resources.take();
+
+        #[cfg(all(
+            feature = "cpu-renderer",
+            any(target_os = "linux", target_os = "freebsd")
+        ))]
+        if inner.cpu_backend.is_some() {
+            // No wgpu instance to reset on the CPU path.
+            return;
+        }
 
         // Forceably drop and recreate our cached `wgpu::Instance` after dropping the renderer.
         // Without this, certain NVIDIA drivers deadlock upon recreating the resources with the
@@ -964,6 +1244,15 @@ impl Window {
             );
             return;
         };
+
+        #[cfg(all(
+            feature = "cpu-renderer",
+            any(target_os = "linux", target_os = "freebsd")
+        ))]
+        if inner.cpu_backend.is_some() {
+            // CPU path owns no GPU resources; nothing to recreate.
+            return;
+        }
 
         let resources = match Resources::new(
             inner.window.clone(),
@@ -1326,11 +1615,26 @@ fn create_window(
 ) -> Result<winit::window::Window> {
     let decorations = !window_options.hide_title_bar;
 
+    // softbuffer 0.4 presents XRGB (0x00RRGGBB), not a supported alpha
+    // surface. Keep Warp's GPU path transparent, but give the CPU fallback
+    // an opaque native window so compositor alpha cannot reinterpret the
+    // reserved high byte / unpainted pixels.
+    #[cfg(all(
+        feature = "cpu-renderer",
+        any(target_os = "linux", target_os = "freebsd")
+    ))]
+    let transparent = !crate::rendering::cpu::cpu_renderer_requested();
+    #[cfg(not(all(
+        feature = "cpu-renderer",
+        any(target_os = "linux", target_os = "freebsd")
+    )))]
+    let transparent = true;
+
     let mut window_attributes = winit::window::WindowAttributes::default()
         .with_min_inner_size(MIN_WINDOW_SIZE)
         .with_decorations(decorations)
         .with_window_level(window_level_for_style(window_options.style))
-        .with_transparent(true);
+        .with_transparent(transparent);
 
     if let Some(title) = &window_options.title {
         window_attributes.title = title.to_owned();
